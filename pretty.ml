@@ -1,0 +1,53 @@
+open Parser
+
+let token_str = function
+	| CLASS -> "class"
+	| ELSE -> "else"
+	| FALSE -> "false"
+	| FOR -> "for"
+	| IF -> "if"
+	| INT -> "int"
+	| NEW -> "new"
+	| NULL -> "NULL"
+	| PUBLIC -> "public"
+	| RETURN -> "return"
+	| THIS -> "this"
+	| TRUE -> "true"
+	| VIRTUAL -> "virtual"
+	| VOID -> "void"
+	| WHILE -> "while"
+	| IDENT(s) -> "'"^s^"'"
+	| ASSIGN -> "="
+	| LOR -> "||"
+	| LAND -> "&&"
+	| EQ -> "=="
+	| NE -> "!="
+	| LT -> "<"
+	| LE -> "<="
+	| GT -> ">"
+	| GE -> ">="
+	| PLUS -> "+"
+	| MINUS -> "-"
+	| TIMES -> "*"
+	| DIV -> "/"
+	| MOD -> "%"
+	| NOT -> "!"
+	| INCR -> "++"
+	| DECR -> "--"
+	| REF -> "&"
+	(* and also : unary dereference, plus, minus *)
+	| LPAREN -> "("
+	| RPAREN -> ")"
+	| RARROW -> "->"
+	| DOT -> "."
+	(* OTHER SYMBOLZ *)
+	| SEMICOLON -> ";"
+	| DOUBLECOLON -> "::"
+	| LFLOW -> "<<"
+	| LBRACE -> "{"
+	| RBRACE -> "}"
+	(* DATAZ *)
+	| INTVAL(i) -> "#" ^ (string_of_int i)
+	| STRVAL(s) -> "`" ^ s ^ "`"
+
+
