@@ -32,7 +32,10 @@
 		let h = Hashtbl.create 20 in
 		List.iter (fun (s, t) -> Hashtbl.add h s t) keywordz_l;
 		fun s ->
-			try Hashtbl.find h s with _ -> IDENT s
+			try Hashtbl.find h s with _ -> 
+				if Sset.mem (!type_names) s
+					then TIDENT s
+					else IDENT s
 }
 
 let digit = ['0'-'9']
@@ -46,6 +49,7 @@ rule token = parse
 	| ident as id			{ id_or_kwd id }
 	| "//"					{ short_comment lexbuf; token lexbuf }
 	| "/*"					{ long_comment lexbuf; token lexbuf }
+	| "#include <iostream>" { INCLUDE_IOSTREAM }
 	| "0x" (hexa+ as n)		{ INTVAL(int_of_string("0x" ^ n)) }
 	| ['1'-'9'] digit* as n	{ INTVAL(int_of_string(n)) }
 	| '0' (octal+ as n)		{ INTVAL(int_of_string("0o" ^ n)) }
