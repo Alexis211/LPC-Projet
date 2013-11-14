@@ -36,6 +36,11 @@
 				if Sset.mem (!type_names) s
 					then TIDENT s
 					else IDENT s
+
+	let newline lexbuf =
+		let pos = lexbuf.lex_curr_p in
+		lexbuf.lex_curr_p <- 
+			{ pos with pos_lnum = pos.pos_lnum + 1; pos_bol = pos.pos_cnum }
 }
 
 let digit = ['0'-'9']
@@ -45,11 +50,13 @@ let octal = ['0'-'7']
 let hexa = ['0'-'9' 'a'-'f' 'A'-'F']
 
 rule token = parse
-	| ['\n' ' ' '\t']+		{ token lexbuf }
+	| [' ' '\t']+			{ token lexbuf }
+	| '\n'					{ newline lexbuf; token lexbuf }
 	| ident as id			{ id_or_kwd id }
 	| "//"					{ short_comment lexbuf; token lexbuf }
 	| "/*"					{ long_comment lexbuf; token lexbuf }
 	| "#include <iostream>" { INCLUDE_IOSTREAM }
+	| "std::cout" { STD_COUT }
 	| "0x" (hexa+ as n)		{ INTVAL(int_of_string("0x" ^ n)) }
 	| ['1'-'9'] digit* as n	{ INTVAL(int_of_string(n)) }
 	| '0' (octal+ as n)		{ INTVAL(int_of_string("0o" ^ n)) }
@@ -81,6 +88,7 @@ rule token = parse
 	| "."					{ DOT }
 	| ";"					{ SEMICOLON }
 	| "::"					{ DOUBLECOLON }
+	| ":"					{ COLON }
 	| "<<"					{ LFLOW }
 	| "{"					{ LBRACE }
 	| "}"					{ RBRACE }

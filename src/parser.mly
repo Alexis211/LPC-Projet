@@ -12,23 +12,23 @@
 %token <string> IDENT
 %token <string> TIDENT
 
-/* this is stupid */
-%token INCLUDE_IOSTREAM
+(* this is stupid *)
+%token INCLUDE_IOSTREAM STD_COUT
 
-/* keywords */
+(* keywords *)
 %token CLASS ELSE FALSE FOR IF INT NEW NULL PUBLIC RETURN
 %token THIS TRUE VIRTUAL VOID WHILE
 
-/* operators */
+(* operators *)
 %token ASSIGN LOR LAND EQ NE LT LE GT GE PLUS MINUS
 %token TIMES DIV MOD NOT INCR DECR REF
 %token LPAREN RPAREN RARROW DOT
 
-/* other symbols */
-%token SEMICLON COLON DOUBLECOLON LFLOW LBRACE RBRACE
+(* other symbols *)
+%token SEMICOLON COLON DOUBLECOLON LFLOW LBRACE RBRACE COMMA EOF
 
 
-/* operator priority */
+(* operator priority *)
 %right ASSIGN
 %left LOR
 %left LAND
@@ -36,12 +36,10 @@
 %left LT LE GT GE
 %left PLUS MINUS
 %left TIMES DIV MOD
-/* opérateurs unaires associatifs à droite */
+%right UNARY
 %left RARROW DOT LPAREN
 
-%start prog
-
-%type <unit> prog
+%start <unit> prog
 
 %%
 
@@ -53,7 +51,7 @@ prog:
 ;
 
 declaration:
-| 	d = decl_var
+| 	d = decl_vars
 	{ d }
 | 	d = decl_class
 	{ d }
@@ -66,6 +64,7 @@ decl_vars:
 |	t = ty
 	vars = separated_nonempty_list(COMMA, var)
 	SEMICOLON
+	{ () }
 ;
 
 decl_class:
@@ -73,26 +72,21 @@ decl_class:
 	s = supers?
 	LBRACE
 	PUBLIC COLON
-	m = members*
+	m = member*
 	RBRACE SEMICOLON
 	{ () }
 ;
 
 supers:
 |	COLON
-	s = separated_nonempty_list(COMMA, super_id)
+	s = separated_nonempty_list(COMMA, preceded(PUBLIC, TIDENT))
 	{ s }
-;
-
-super_id:
-|	PUBLIC i = TIDENT
-	{ i }
 ;
 
 member:
 |	d = decl_vars
 	{ () }
-|	v = VIRTUAL?
+|	v = boption(VIRTUAL)
 	p = proto
 	{ () }
 ;
@@ -103,12 +97,21 @@ proto:
 	LPAREN args = separated_list(COMMA, argument) RPAREN
 	{ () }
 |	qi = TIDENT
-	LPAREN args = separated_list(COMMA, arg) RPAREN
+	LPAREN args = separated_list(COMMA, argument) RPAREN
 	{ () }
 |	qa = TIDENT DOUBLECOLON
 	qb = TIDENT
-	LPAREN args = separated_list(COMMA, arg) RPAREN
+	LPAREN args = separated_list(COMMA, argument) RPAREN
 	{ () }
+;
+
+ty:
+|	VOID
+	{ () }
+|	INT
+	{ () }
+|	i = TIDENT
+	{ i }
 ;
 
 argument:
@@ -149,7 +152,7 @@ expression:
 |	TRUE { EBoolConst(true) }
 |	NULL { ENull }
 |	q = qident { () }
-|	TIMES expression { EUnary(Deref, e) }
+|	TIMES expression { EUnary(Deref, e) } %prec UNARY
 |	e1 = expression DOT e2 = IDENT { () }
 |	e1 = expression RARROW e2 = IDENT { () }
 |	e1 = expression ASSIGN e2 = expression { () }
@@ -159,14 +162,14 @@ expression:
 |	NEW c = IDENT LPAREN
 	a = separated_list(COLON, expression)
 	{ () }
-|	INCR e = expression { EUnary(PreIncr, e) }
-|	DECR e = expression { EUnary(PreDecr, e) }
-|	e = expression INCR { EUnary(PostIncr, e) }
-|	e = expression DECR { EUnary(PostDecr, e) }
-|	REF e = expression { EUnary(Ref, e) }
-|	NOT e = expression { EUnary(Not, e) }
-|	MINUS e = expression { EUnary(Minus, e) }
-|	PLUS e = expression { EUnary(Plus, e) }
+|	INCR e = expression { EUnary(PreIncr, e) } %prec UNARY
+|	DECR e = expression { EUnary(PreDecr, e) } %prec UNARY
+|	e = expression INCR { EUnary(PostIncr, e) } %prec UNARY
+|	e = expression DECR { EUnary(PostDecr, e) } %prec UNARY
+|	REF e = expression { EUnary(Ref, e) } %prec UNARY
+|	NOT e = expression { EUnary(Not, e) } %prec UNARY
+|	MINUS e = expression { EUnary(Minus, e) } %prec UNARY
+|	PLUS e = expression { EUnary(Plus, e) } %prec UNARY
 |	e1 = expression
 	o = operator
 	e2 = expression
@@ -176,7 +179,7 @@ expression:
 
 operator:
 |	EQ { Equal }
-|	NEQ { NotEqual }
+|	NE { NotEqual }
 |	LT	{ Lt }
 |	LE	{ Le }
 |	GT	{ Gt }
@@ -188,4 +191,56 @@ operator:
 |	MOD { Modulo }
 |	LAND { Land }
 |	LOR { Lor }
+;
+
+instruction:
+|	SEMICOLON
+	{ () }
+|	e = expression SEMICOLON
+	{ () }
+|	t = ty
+	v = var
+	ASSIGN e = expression? SEMICOLON
+	{ IDeclVar(t, v, e) }
+|	t = ty
+	v = var
+	ASSIGN cl = TIDENT
+	LPAREN e = separated_list(COMMA, expression) RPAREN
+	SEMICOLON
+	{ IDeclVarAssignConstruct (t, v, cl, e) }
+|	IF LPAREN e = expression RPAREN i = instruction 
+	{ IIf(e, i, IEmpty) }
+|	IF LPAREN e = expression RPAREN i1 = instruction
+	ELSE i2 = instruction 
+	{ IIf(e, i1, i2) }
+|	WHILE LPAREN e = expression RPAREN i = instruction
+	{ IWhile(e, i) }
+|	FOR LPAREN
+	start = separated_list(COMMA, expression) SEMICOLON
+	cond = expression? SEMICOLON
+	loop = separated_list(COMMA, expression) RPAREN
+	i = instruction
+	{ IFor(start, cond, loop, i) } 
+|	b = block
+	{ IBlock(b) }
+|	STD_COUT
+	e = preceded(LFLOW, expr_str)+
+	SEMICOLON
+	{ IStdCoutWrite(e) }
+|	RETURN e = expression? SEMICOLON
+	{ IReturn(e) }
+;
+
+expr_str:
+|	e = expression
+	{ SEExpr(e) }
+|	s = STRVAL
+	{ SEStr(s) }
+;
+
+block:
+|	LBRACE
+	i = instruction*
+	RBRACE
+	{ i }
 ;
