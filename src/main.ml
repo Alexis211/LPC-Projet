@@ -1,6 +1,8 @@
 open Format
 open Lexing
 
+let parse_only = ref false
+
 let ifile = ref ""
 
 let set_var v s = v := s
@@ -13,7 +15,14 @@ let localisation pos =
 	eprintf "File \"%s\", line %d, characters %d-%d:\n"
 		!ifile l (c-1) c
 	
-let options = []
+let options = [
+	"-parse-only", Arg.Set parse_only, "Stops after parsing of the input file."
+	]
+
+let localisation pos =
+  let l = pos.pos_lnum in
+  let c = pos.pos_cnum - pos.pos_bol + 1 in
+  eprintf "File \"%s\", line %d, characters %d-%d:\n" !ifile l (c-1) c
 
 let () =
 	Arg.parse options (set_var ifile) usage;
@@ -31,14 +40,16 @@ let () =
 	let buf = Lexing.from_channel f in
 
 	try
-		while true do
-			print_string (Pretty.token_str (Lexer.token buf));
-			print_string "\n"
-		done
+		let p = Parser.prog Lexer.token buf in
+		close_in f;
+		
+		Pretty.print_prog p;
 	with
-		| Lexer.End_of_file ->
-			exit 0
 		| Lexer.Lexing_error s ->
 			localisation (Lexing.lexeme_start_p buf);
 			eprintf "Lexical analysis error: %s@." s;
 			exit 1
+		| Parser.Error -> 
+		localisation (Lexing.lexeme_start_p buf);
+		eprintf "Parsing error.@.";
+		exit 1

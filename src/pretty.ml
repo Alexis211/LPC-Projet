@@ -1,4 +1,5 @@
 open Parser
+open Ast
 
 let token_str = function
 	| CLASS -> "class"
@@ -17,6 +18,7 @@ let token_str = function
 	| VOID -> "void"
 	| WHILE -> "while"
 	| IDENT(s) -> "'"^s^"'"
+	| TIDENT(s) -> "\""^s^"\""
 	| ASSIGN -> "="
 	| LOR -> "||"
 	| LAND -> "&&"
@@ -46,8 +48,80 @@ let token_str = function
 	| LFLOW -> "<<"
 	| LBRACE -> "{"
 	| RBRACE -> "}"
+	| COMMA -> ","
+	| COLON -> ":"
 	(* DATAZ *)
 	| INTVAL(i) -> "#" ^ (string_of_int i)
 	| STRVAL(s) -> "`" ^ s ^ "`"
+	(* STUPIDITIEZS *)
+	| STD_COUT -> "std::cout"
+	| INCLUDE_IOSTREAM -> "#include <iostream>"
+	| EOF -> "end."
 
+let print_tok t =
+	print_string ((token_str t) ^ "\n")
+
+(* printing AST's *)
+
+let binop_str = function
+	| Equal -> "==" | NotEqual -> "!=" | Lt -> "<" | Le -> "<="
+	| Gt -> ">" | Ge -> ">=" | Add -> "+" | Sub -> "-" | Mul -> "*" | Div -> "/"
+	| Modulo -> "%" | Land -> "&&" | Lor -> "||"
+let unop_str = function
+	| PreIncr -> "++." | PostIncr -> ".++" | PreDecr -> "--." | PostDecr -> ".--"
+	| Ref -> "&" | Deref -> "&" | Not -> "!" | Minus -> "-" | Plus -> "+"
+let rec var_type_str = function
+	| TVoid -> "void" | TInt -> "int" | TIdent(i) -> i
+	| TPtr(k) -> "*" ^ (var_type_str k)
+	| TRef(k) -> "&" ^ (var_type_str k)
+let rec expr_string = function
+	| EInt(i) -> string_of_int i
+	| EBool(b) -> (if b then "true" else "false")
+	| ENull -> "NULL"
+	| EIdent(i) -> i
+	| EAssign(k, p) -> "(" ^ (expr_string k) ^ " = " ^ (expr_string p) ^ ")"
+	| ECall(e, f) -> (expr_string e) ^ (List.fold_left (fun x k -> x ^ ", " ^ (expr_string k)) "" f) ^ ")"
+	| EUnary(e, f) -> (unop_str e) ^ (expr_string f)
+	| EBinary(e1, o, e2) -> "(" ^ (expr_string e1) ^ " " ^ (binop_str o) ^ " " ^ (expr_string e2) ^ ")"
+
+let rec print_stmt l x =
+	for i = 1 to l do print_string " " done;
+	match x with 
+	| SEmpty -> print_string ";\n"
+	| SExpr(e) -> print_string ((expr_string e) ^ "\n")
+	| SIf(e, a, b) -> print_string ("if " ^ (expr_string e) ^ "\n");
+		print_stmt (l+1) a;
+		for i = 0 to l do print_string " " done;
+		print_string "else\n";
+		print_stmt (l+1) b
+	| SWhile(e, a) -> print_string ("while " ^ (expr_string e) ^ "\n");
+		print_stmt (l+1) a;
+	| SFor(i, c, f, s) -> print_string 
+		("for " ^ 
+			(List.fold_left (fun x k -> x ^ ", " ^ (expr_string k)) "" i) ^ "; " ^
+			(match c with | None -> "" | Some(a) -> expr_string a) ^ "; " ^
+			(List.fold_left (fun x k -> x ^ ", " ^ (expr_string k)) "" f) ^ "\n");
+		print_stmt (l+1) s
+	| SBlock(b) -> print_block l b
+	| SReturn(None) -> print_string "return\n"
+	| SReturn(Some k) -> print_string ("return" ^ (expr_string k) ^ "\n")
+	| SDeclare(i, t, None) -> print_string (i ^ " : " ^ (var_type_str t) ^ "\n")
+	| SDeclare(i, t, Some e) -> print_string (i ^ " : " ^ (var_type_str t) ^ " = " ^ (expr_string e) ^ "\n")
+and print_block n b =
+	let prefix = String.make n ' ' in
+	print_string (prefix ^ "{\n");
+	List.iter
+		(fun s -> print_stmt (n+1) s)
+		b;
+	print_string (prefix ^ "}\n")
+
+let proto_str p =
+	p.p_name ^ " (" ^ (List.fold_left (fun x (i, t) -> x ^ ", " ^ i ^ " : " ^ (var_type_str t)) "" p.p_args)
+		^ ") : " ^ (var_type_str p.p_ret_type)
+
+let print_prog p =
+	List.iter (function
+		| DGlobal(i, t) -> print_string ("decl " ^ i ^ " : " ^ (var_type_str t) ^ "\n")
+		| DFunction(p, b) -> print_string (proto_str p ^"\n");
+			print_block 0 b) p
 

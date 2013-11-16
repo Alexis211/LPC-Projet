@@ -1,10 +1,22 @@
+(*
+	Langages de Programmation et Compilation (J.-C. Filliatre)
+	2013-2014
+	Alex AUVOLAT
+
+	Parser for Mini-C++
+*)
 
 %{
 	open Ast
 
-	module Sset = Set.Make(String)
-
-	let type_names = ref Sset.empty
+	type var =
+		| VId of ident
+		| VPtr of var
+		| VRef of var
+	let rec reverse_var bt v = match v with
+		| VId(i) -> i, bt
+		| VPtr(vv) -> let id, ty = reverse_var bt vv in id, TPtr(ty)
+		| VRef(vv) -> let id, ty = reverse_var bt vv in id, TRef(ty)
 %}
 
 %token <int> INTVAL
@@ -39,7 +51,7 @@
 %right UNARY
 %left RARROW DOT LPAREN
 
-%start <unit> prog
+%start <Ast.program> prog
 
 %%
 
@@ -47,200 +59,109 @@ prog:
 	INCLUDE_IOSTREAM?
 	decls = declaration*
 	EOF
-		{ () }
+	{ List.flatten decls }
 ;
 
 declaration:
-| 	d = decl_vars
-	{ d }
-| 	d = decl_class
-	{ d }
-|	p = proto
+|	ident = typed_var
+	LPAREN args = typed_var* RPAREN
 	b = block
-	{ () }
-;
-
-decl_vars:
-|	t = ty
-	vars = separated_nonempty_list(COMMA, var)
+	{ [ DFunction({p_ret_type = snd ident; p_name = fst ident; p_args = args}, b) ] }
+|	vars = typed_vars
 	SEMICOLON
-	{ () }
+	{ List.map (fun k -> DGlobal(k)) vars }
 ;
 
-decl_class:
-|	CLASS i = IDENT
-	s = supers?
-	LBRACE
-	PUBLIC COLON
-	m = member*
-	RBRACE SEMICOLON
-	{ () }
+typed_var:
+|	b = base_type
+	x = var
+	{ reverse_var b x }
 ;
 
-supers:
-|	COLON
-	s = separated_nonempty_list(COMMA, preceded(PUBLIC, TIDENT))
-	{ s }
+typed_vars:
+|	b = base_type
+	x = separated_nonempty_list(COMMA, var)
+	{ List.map (reverse_var b) x }
 ;
 
-member:
-|	d = decl_vars
-	{ () }
-|	v = boption(VIRTUAL)
-	p = proto
-	{ () }
-;
-
-proto:
-|	t = ty
-	qv = qvar
-	LPAREN args = separated_list(COMMA, argument) RPAREN
-	{ () }
-|	qi = TIDENT
-	LPAREN args = separated_list(COMMA, argument) RPAREN
-	{ () }
-|	qa = TIDENT DOUBLECOLON
-	qb = TIDENT
-	LPAREN args = separated_list(COMMA, argument) RPAREN
-	{ () }
-;
-
-ty:
-|	VOID
-	{ () }
-|	INT
-	{ () }
-|	i = TIDENT
-	{ i }
-;
-
-argument:
-|	t = ty
-	v = var
-	{ () }
+base_type:
+|	VOID { TVoid }
+|	INT	{ TInt }
+|	t = TIDENT { TIdent(t) }
 ;
 
 var:
-|	i = IDENT
-	{ () }
-|	TIMES v = var
-	{ () }
-|	REF v = var
-	{ () }
-;
-
-qvar:
-|	qi = qident
-	{ qi }
-|	TIMES v = qvar
-	{ () }
-|	REF v = qvar
-	{ () }
-;
-
-qident:
-|	i = IDENT
-	{ () }
-|	i = IDENT DOUBLECOLON j = IDENT
-	{ () }
-;
-
-expression:
-|	i = INTVAL { EIntConst(i) }
-|	THIS { EThis }
-|	FALSE { EBoolConst(false) }
-|	TRUE { EBoolConst(true) }
-|	NULL { ENull }
-|	q = qident { () }
-|	TIMES expression { EUnary(Deref, e) } %prec UNARY
-|	e1 = expression DOT e2 = IDENT { () }
-|	e1 = expression RARROW e2 = IDENT { () }
-|	e1 = expression ASSIGN e2 = expression { () }
-|	f = expression LPAREN
-	a = separated_list(COLON, expression)
-	{ () }
-|	NEW c = IDENT LPAREN
-	a = separated_list(COLON, expression)
-	{ () }
-|	INCR e = expression { EUnary(PreIncr, e) } %prec UNARY
-|	DECR e = expression { EUnary(PreDecr, e) } %prec UNARY
-|	e = expression INCR { EUnary(PostIncr, e) } %prec UNARY
-|	e = expression DECR { EUnary(PostDecr, e) } %prec UNARY
-|	REF e = expression { EUnary(Ref, e) } %prec UNARY
-|	NOT e = expression { EUnary(Not, e) } %prec UNARY
-|	MINUS e = expression { EUnary(Minus, e) } %prec UNARY
-|	PLUS e = expression { EUnary(Plus, e) } %prec UNARY
-|	e1 = expression
-	o = operator
-	e2 = expression
-	{ EBinop(e1, o, e2) }
-|	LPAREN e = expression RPAREN { e }
-;
-
-operator:
-|	EQ { Equal }
-|	NE { NotEqual }
-|	LT	{ Lt }
-|	LE	{ Le }
-|	GT	{ Gt }
-|	GE	{ Ge }
-|	PLUS { Add }
-|	MINUS { Sub }
-|	TIMES { Mul }
-|	DIV { Div }
-|	MOD { Modulo }
-|	LAND { Land }
-|	LOR { Lor }
-;
-
-instruction:
-|	SEMICOLON
-	{ () }
-|	e = expression SEMICOLON
-	{ () }
-|	t = ty
-	v = var
-	ASSIGN e = expression? SEMICOLON
-	{ IDeclVar(t, v, e) }
-|	t = ty
-	v = var
-	ASSIGN cl = TIDENT
-	LPAREN e = separated_list(COMMA, expression) RPAREN
-	SEMICOLON
-	{ IDeclVarAssignConstruct (t, v, cl, e) }
-|	IF LPAREN e = expression RPAREN i = instruction 
-	{ IIf(e, i, IEmpty) }
-|	IF LPAREN e = expression RPAREN i1 = instruction
-	ELSE i2 = instruction 
-	{ IIf(e, i1, i2) }
-|	WHILE LPAREN e = expression RPAREN i = instruction
-	{ IWhile(e, i) }
-|	FOR LPAREN
-	start = separated_list(COMMA, expression) SEMICOLON
-	cond = expression? SEMICOLON
-	loop = separated_list(COMMA, expression) RPAREN
-	i = instruction
-	{ IFor(start, cond, loop, i) } 
-|	b = block
-	{ IBlock(b) }
-|	STD_COUT
-	e = preceded(LFLOW, expr_str)+
-	SEMICOLON
-	{ IStdCoutWrite(e) }
-|	RETURN e = expression? SEMICOLON
-	{ IReturn(e) }
-;
-
-expr_str:
-|	e = expression
-	{ SEExpr(e) }
-|	s = STRVAL
-	{ SEStr(s) }
+|	t = IDENT { VId(t) }
+|	TIMES v = var { VPtr(v) }
+|	REF v = var { VRef(v) }
 ;
 
 block:
 |	LBRACE
-	i = instruction*
+	i = statement*
 	RBRACE
 	{ i }
+;
+
+statement:
+|	SEMICOLON
+	{ SEmpty }
+|	e = expression SEMICOLON { SExpr(e) }
+|	IF LPAREN c = expression RPAREN s = statement
+	{ SIf(c, s, SEmpty) }
+|	IF LPAREN c = expression RPAREN s = statement ELSE t = statement
+	{ SIf(c, s, t) }
+|	WHILE LPAREN c = expression RPAREN s = statement
+	{ SWhile(c, s) }
+|	FOR LPAREN k = separated_list(COMMA, expression) SEMICOLON
+	c = expression? SEMICOLON 
+	r = separated_list(COMMA, expression) RPAREN
+	b = statement
+	{ SFor(k, c, r, b) }
+|	b = block
+	{ SBlock (b) }
+|	RETURN e = expression? SEMICOLON
+	{ SReturn (e) }
+|	k = typed_var v = preceded(ASSIGN, expression)? SEMICOLON
+	{ SDeclare(fst k, snd k, v) }
+;
+
+expression:
+|	NULL { ENull }
+|	i = INTVAL { EInt(i) }
+|	TRUE { EBool(true) }
+|	FALSE { EBool(false) }
+|	i = IDENT { EIdent(i) }
+|	e1 = expression ASSIGN e2 = expression { EAssign(e1, e2) }
+|	b = binop { b }
+|	a = unop { a }
+|	LPAREN e = expression RPAREN { e }
+;
+
+binop:
+|	a = expression EQ b = expression { EBinary(a, Equal, b) }
+|	a = expression NE b = expression { EBinary(a, NotEqual, b) }
+|	a = expression LAND b = expression { EBinary(a, Land, b) }
+|	a = expression LOR b = expression { EBinary(a, Lor, b) }
+|	a = expression GT b = expression { EBinary(a, Gt, b) }
+|	a = expression GE b = expression { EBinary(a, Ge, b) }
+|	a = expression LT b = expression { EBinary(a, Lt, b) }
+|	a = expression LE b = expression { EBinary(a, Le, b) }
+|	a = expression PLUS b = expression { EBinary(a, Add, b) }
+|	a = expression MINUS b = expression { EBinary(a, Sub, b) }
+|	a = expression TIMES b = expression { EBinary(a, Mul, b) }
+|	a = expression DIV b = expression { EBinary(a, Div, b) }
+|	a = expression MOD b = expression { EBinary(a, Modulo, b) }
+;
+
+unop:
+|	NOT e = expression { EUnary(Not, e) } %prec UNARY
+|	MINUS e = expression { EUnary(Minus, e) } %prec UNARY
+|	PLUS e = expression { EUnary(Plus, e) } %prec UNARY
+|	REF e = expression { EUnary(Ref, e) } %prec UNARY
+|	TIMES e = expression { EUnary(Deref, e) } %prec UNARY
+|	INCR e = expression { EUnary(PreIncr, e) } %prec UNARY
+|	e = expression INCR { EUnary(PostIncr, e) }
+|	DECR e = expression { EUnary(PreDecr, e) } %prec UNARY
+|	e = expression DECR { EUnary(PostDecr, e) }
 ;

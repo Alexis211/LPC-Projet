@@ -8,7 +8,6 @@
 	open Parser
 	
 	exception Lexing_error of string
-	exception End_of_file
 
 	let keywordz_l = [
 		"class",	CLASS;
@@ -33,7 +32,7 @@
 		List.iter (fun (s, t) -> Hashtbl.add h s t) keywordz_l;
 		fun s ->
 			try Hashtbl.find h s with _ -> 
-				if Sset.mem (!type_names) s
+				if Ast.Sset.mem s !Ast.type_names
 					then TIDENT s
 					else IDENT s
 
@@ -92,7 +91,8 @@ rule token = parse
 	| "<<"					{ LFLOW }
 	| "{"					{ LBRACE }
 	| "}"					{ RBRACE }
-	| eof					{ raise End_of_file }
+	| ","					{ COMMA }
+	| eof					{ EOF }
 	| _ as c
 		{ raise 
 			(Lexing_error
