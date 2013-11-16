@@ -35,11 +35,18 @@ type expression =
 	| EInt of int
 	| EBool of bool
 	| ENull
+	| EThis
 	| EIdent of ident
 	| EAssign of expression * expression
 	| ECall of expression * expression list
 	| EUnary of unop * expression
 	| EBinary of expression * binop * expression
+	| EMember of expression * ident
+	| ENew of ident * expression list
+
+type str_expression =
+	| SEExpr of expression
+	| SEStr of string
 
 type statement =
 	| SEmpty
@@ -49,17 +56,34 @@ type statement =
 	| SFor of expression list * expression option * expression list * statement
 	| SBlock of block
 	| SReturn of expression option
-	| SDeclare of ident * var_type * expression option
+	| SDeclare of var_type * ident
+	| SDeclareAssignExpr of var_type * ident * expression
+	| SDeclareAssignConstructor of var_type * ident * ident * expression list
+			(* Type of variable, variable name, constructor class name, constructor arguments *)
+	| SWriteCout of str_expression list
 and block = statement list
 
 type proto = {
-	p_name : ident;
-	p_ret_type : var_type;
-	p_args : (ident * var_type) list;
+	p_name : ident;	
+	p_class : ident option; (* p_class = none : standalone function *)
+	p_ret_type : var_type option; (* p_class = some and p_ret_type = none : constructor *)
+	p_args : (var_type * ident) list;
+}
+
+type cls_mem =
+	| CVar of var_type * ident
+	| CMethod of proto
+	| CVirtualMethod of proto
+
+type cls = {
+	c_name : ident;
+	c_supers : ident list option;
+	c_members : cls_mem list;
 }
 
 type declaration =
-	| DGlobal of (ident * var_type)
+	| DGlobal of (var_type * ident)
 	| DFunction of (proto * block)
+	| DClass of cls
 
 type program = declaration list

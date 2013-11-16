@@ -13,10 +13,17 @@
 		| VId of ident
 		| VPtr of var
 		| VRef of var
+	
+	(* return type, name *)
 	let rec reverse_var bt v = match v with
-		| VId(i) -> i, bt
-		| VPtr(vv) -> let id, ty = reverse_var bt vv in id, TPtr(ty)
-		| VRef(vv) -> let id, ty = reverse_var bt vv in id, TRef(ty)
+		| VId(i) -> bt, i
+		| VPtr(vv) -> let ty, id = reverse_var bt vv in TPtr(ty), id
+		| VRef(vv) -> let ty, id = reverse_var bt vv in TRef(ty), id
+	
+	(* return type, class, name *)
+	let rec reverse_qvar bt (v, cl) =
+		let ty, na = reverse_var bt v in
+		ty, cl, na
 %}
 
 %token <int> INTVAL
@@ -48,7 +55,7 @@
 %left LT LE GT GE
 %left PLUS MINUS
 %left TIMES DIV MOD
-%left RARROW DOT LPAREN
+%nonassoc LPAREN
 
 %start <Ast.program> prog
 
@@ -62,13 +69,71 @@ prog:
 ;
 
 declaration:
-|	ident = typed_var
-	LPAREN args = typed_var* RPAREN
+|	p = proto
 	b = block
-	{ [ DFunction({p_ret_type = snd ident; p_name = fst ident; p_args = args}, b) ] }
+	{ [ DFunction(p, b) ] }
 |	vars = typed_vars
 	SEMICOLON
 	{ List.map (fun k -> DGlobal(k)) vars }
+|	n = cls
+	s = supers? LBRACE PUBLIC COLON
+	m = member* RBRACE SEMICOLON
+	{
+		[ DClass({
+			c_name = n;
+			c_supers = s;
+			c_members = List.flatten m;
+		}) ]
+	}
+;
+
+cls:
+	CLASS n = IDENT
+	{
+		type_names := Sset.add n !type_names;
+		n
+	}
+;
+
+supers:
+	COLON s = separated_nonempty_list(COMMA, preceded(PUBLIC, TIDENT)) { s }
+;
+
+member:
+|	k = typed_vars SEMICOLON
+	{ List.map (fun (x, y) -> CVar(x, y)) k }
+|	p = cls_proto SEMICOLON
+	{ [ CMethod(p) ] }
+|	VIRTUAL p = cls_proto SEMICOLON
+	{ [ CVirtualMethod(p) ] }
+;
+
+cls_proto:
+|	ident = typed_var
+	LPAREN args = separated_list(COMMA, typed_var) RPAREN
+	{ {p_ret_type = Some(fst ident); p_name = snd ident; p_class = None; p_args = args} }
+|	cls = TIDENT
+	LPAREN args = separated_list(COMMA, typed_var) RPAREN
+	{ {p_ret_type = None; p_name = cls; p_class = Some cls; p_args = args} }
+;
+
+proto:
+|	ident = typed_qvar
+	LPAREN args = separated_list(COMMA, typed_var) RPAREN
+	{
+		let ty, cl, na = ident in
+		{ p_ret_type = Some ty; p_name = na; p_class = cl; p_args = args} }
+|	cls = TIDENT DOUBLECOLON cls2 = TIDENT
+	LPAREN args = separated_list(COMMA, typed_var) RPAREN
+	{
+		{p_ret_type = None; p_name = cls2; p_class = Some cls; p_args = args}
+	}
+;
+
+base_type:
+|	VOID { TVoid }
+|	INT	{ TInt }
+|	t = TIDENT { TIdent(t) }
 ;
 
 typed_var:
@@ -83,16 +148,23 @@ typed_vars:
 	{ List.map (reverse_var b) x }
 ;
 
-base_type:
-|	VOID { TVoid }
-|	INT	{ TInt }
-|	t = TIDENT { TIdent(t) }
-;
-
 var:
 |	t = IDENT { VId(t) }
 |	TIMES v = var { VPtr(v) }
 |	REF v = var { VRef(v) }
+;
+
+typed_qvar:
+|	b = base_type
+	x = qvar
+	{ reverse_qvar b x }
+;
+
+qvar:
+|	c = TIDENT DOUBLECOLON t = IDENT { VId(t), Some(c) }
+|	t = IDENT { VId(t), None }
+|	TIMES v = qvar { VPtr(fst v), snd v }
+|	REF v = qvar { VRef(fst v), snd v }
 ;
 
 block:
@@ -136,8 +208,16 @@ common_statement:
 	{ SBlock (b) }
 |	RETURN e = expression? SEMICOLON
 	{ SReturn (e) }
-|	k = typed_var v = preceded(ASSIGN, expression)? SEMICOLON
-	{ SDeclare(fst k, snd k, v) }
+|	k = typed_var SEMICOLON
+	{ SDeclare(fst k, snd k) }
+|	k = typed_var ASSIGN v = expression SEMICOLON
+	{ SDeclareAssignExpr(fst k, snd k, v) }
+|	k = typed_var ASSIGN cls = TIDENT LPAREN args = separated_list(COMMA, expression) RPAREN SEMICOLON
+	{ SDeclareAssignConstructor(fst k, snd k, cls, args) }
+|	STD_COUT
+	a = nonempty_list(preceded(LFLOW, str_expression))
+	SEMICOLON
+	{ SWriteCout(a) }
 ;
 
 expression:
@@ -145,15 +225,7 @@ expression:
 |	a = expression b = binop c = expression { EBinary(a, b, c) }
 |	a = expression LPAREN arg = separated_list(COMMA, expression) RPAREN { ECall(a, arg) }
 |	a = unop { a }
-;
-
-primary:
-|	NULL { ENull }
-|	i = INTVAL { EInt(i) }
-|	TRUE { EBool(true) }
-|	FALSE { EBool(false) }
-|	i = IDENT { EIdent(i) }
-|	LPAREN e = expression RPAREN { e }
+|	NEW c = TIDENT LPAREN args = separated_list(COMMA, expression) RPAREN { ENew(c, args) }
 ;
 
 %inline binop:
@@ -172,6 +244,18 @@ primary:
 |	MOD { Modulo }
 ;
 
+primary:
+|	NULL { ENull }
+|	THIS { EThis }
+|	i = INTVAL { EInt(i) }
+|	TRUE { EBool(true) }
+|	FALSE { EBool(false) }
+|	i = IDENT { EIdent(i) }
+|	LPAREN e = expression RPAREN { e }
+|	a = primary RARROW b = IDENT { EMember(EUnary(Deref, a), b) }
+|	a = primary DOT b = IDENT { EMember(a, b) }
+;
+
 unop:
 |	e = lunop { e }
 |	e = unop INCR { EUnary(PostIncr, e) }
@@ -187,4 +271,9 @@ lunop:
 |	INCR e = lunop { EUnary(PreIncr, e) }
 |	DECR e = lunop { EUnary(PreDecr, e) }
 |	e = primary { e }
+;
+
+str_expression:
+|	e = expression { SEExpr(e) }
+|	s = STRVAL { SEStr(s) }
 ;

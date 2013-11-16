@@ -54,8 +54,9 @@ rule token = parse
 	| ident as id			{ id_or_kwd id }
 	| "//"					{ short_comment lexbuf; token lexbuf }
 	| "/*"					{ long_comment lexbuf; token lexbuf }
-	| "#include <iostream>" { INCLUDE_IOSTREAM }
-	| "std::cout" { STD_COUT }
+	| "#include <iostream>" { INCLUDE_IOSTREAM }		(* nasty hack #1 *)
+	| "std::cout" { STD_COUT }							(* nasty hack #2 *)
+	| "std::endl" { STRVAL("\n") }						(* nasty hack #3 *)
 	| "0x" (hexa+ as n)		{ INTVAL(int_of_string("0x" ^ n)) }
 	| ['1'-'9'] digit* as n	{ INTVAL(int_of_string(n)) }
 	| '0' (octal+ as n)		{ INTVAL(int_of_string("0o" ^ n)) }

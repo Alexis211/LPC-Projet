@@ -25,3 +25,12 @@ for a in ../tests/typing/*/*.cpp; do
 		else echo "FAIL  $a";
 	fi;
 done;
+
+echo "---"
+echo "Testing EXEC/ only against parsing"
+for a in ../tests/exec/*.cpp; do
+	if ./main.byte -parse-only $a;
+		then echo "OK    $a";
+		else echo "FAIL  $a";
+	fi;
+done;
