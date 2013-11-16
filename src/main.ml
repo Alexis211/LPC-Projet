@@ -2,6 +2,7 @@ open Format
 open Lexing
 
 let parse_only = ref false
+let dump = ref false
 
 let ifile = ref ""
 
@@ -16,7 +17,8 @@ let localisation pos =
 		!ifile l (c-1) c
 	
 let options = [
-	"-parse-only", Arg.Set parse_only, "Stops after parsing of the input file."
+	"-parse-only", Arg.Set parse_only, "Stops after parsing of the input file.";
+	"-dump", Arg.Set dump, "Dump the AST after parsing."
 	]
 
 let localisation pos =
@@ -43,7 +45,7 @@ let () =
 		let p = Parser.prog Lexer.token buf in
 		close_in f;
 		
-		Pretty.print_prog p;
+		if !dump then Pretty.print_prog p;
 	with
 		| Lexer.Lexing_error s ->
 			localisation (Lexing.lexeme_start_p buf);

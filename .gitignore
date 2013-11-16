@@ -2,3 +2,5 @@ _build
 *.byte
 .depend
 *.swp
+src/parser.automaton
+src/parser.conflicts

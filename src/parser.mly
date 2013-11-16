@@ -48,7 +48,6 @@
 %left LT LE GT GE
 %left PLUS MINUS
 %left TIMES DIV MOD
-%right UNARY
 %left RARROW DOT LPAREN
 
 %start <Ast.program> prog
@@ -104,12 +103,10 @@ block:
 ;
 
 statement:
-|	SEMICOLON
-	{ SEmpty }
-|	e = expression SEMICOLON { SExpr(e) }
+|	k = common_statement { k }
 |	IF LPAREN c = expression RPAREN s = statement
 	{ SIf(c, s, SEmpty) }
-|	IF LPAREN c = expression RPAREN s = statement ELSE t = statement
+|	IF LPAREN c = expression RPAREN s = no_if_statement ELSE t = statement
 	{ SIf(c, s, t) }
 |	WHILE LPAREN c = expression RPAREN s = statement
 	{ SWhile(c, s) }
@@ -118,6 +115,23 @@ statement:
 	r = separated_list(COMMA, expression) RPAREN
 	b = statement
 	{ SFor(k, c, r, b) }
+;
+
+no_if_statement:
+|	WHILE LPAREN c = expression RPAREN s = no_if_statement
+	{ SWhile(c, s) }
+|	FOR LPAREN k = separated_list(COMMA, expression) SEMICOLON
+	c = expression? SEMICOLON 
+	r = separated_list(COMMA, expression) RPAREN
+	b = no_if_statement
+	{ SFor(k, c, r, b) }
+|	c = common_statement { c }
+;
+
+common_statement:
+|	SEMICOLON
+	{ SEmpty }
+|	e = expression SEMICOLON { SExpr(e) }
 |	b = block
 	{ SBlock (b) }
 |	RETURN e = expression? SEMICOLON
@@ -127,41 +141,50 @@ statement:
 ;
 
 expression:
+|	e1 = expression ASSIGN e2 = expression { EAssign(e1, e2) }
+|	a = expression b = binop c = expression { EBinary(a, b, c) }
+|	a = expression LPAREN arg = separated_list(COMMA, expression) RPAREN { ECall(a, arg) }
+|	a = unop { a }
+;
+
+primary:
 |	NULL { ENull }
 |	i = INTVAL { EInt(i) }
 |	TRUE { EBool(true) }
 |	FALSE { EBool(false) }
 |	i = IDENT { EIdent(i) }
-|	e1 = expression ASSIGN e2 = expression { EAssign(e1, e2) }
-|	b = binop { b }
-|	a = unop { a }
 |	LPAREN e = expression RPAREN { e }
 ;
 
-binop:
-|	a = expression EQ b = expression { EBinary(a, Equal, b) }
-|	a = expression NE b = expression { EBinary(a, NotEqual, b) }
-|	a = expression LAND b = expression { EBinary(a, Land, b) }
-|	a = expression LOR b = expression { EBinary(a, Lor, b) }
-|	a = expression GT b = expression { EBinary(a, Gt, b) }
-|	a = expression GE b = expression { EBinary(a, Ge, b) }
-|	a = expression LT b = expression { EBinary(a, Lt, b) }
-|	a = expression LE b = expression { EBinary(a, Le, b) }
-|	a = expression PLUS b = expression { EBinary(a, Add, b) }
-|	a = expression MINUS b = expression { EBinary(a, Sub, b) }
-|	a = expression TIMES b = expression { EBinary(a, Mul, b) }
-|	a = expression DIV b = expression { EBinary(a, Div, b) }
-|	a = expression MOD b = expression { EBinary(a, Modulo, b) }
+%inline binop:
+|	EQ {Equal }
+|	NE { NotEqual }
+|	LAND { Land }
+|	LOR { Lor }
+|	GT { Gt }
+|	GE { Ge }
+|	LT { Lt }
+|	LE { Le }
+|	PLUS { Add }
+|	MINUS { Sub }
+|	TIMES { Mul }
+|	DIV { Div }
+|	MOD { Modulo }
 ;
 
 unop:
-|	NOT e = expression { EUnary(Not, e) } %prec UNARY
-|	MINUS e = expression { EUnary(Minus, e) } %prec UNARY
-|	PLUS e = expression { EUnary(Plus, e) } %prec UNARY
-|	REF e = expression { EUnary(Ref, e) } %prec UNARY
-|	TIMES e = expression { EUnary(Deref, e) } %prec UNARY
-|	INCR e = expression { EUnary(PreIncr, e) } %prec UNARY
-|	e = expression INCR { EUnary(PostIncr, e) }
-|	DECR e = expression { EUnary(PreDecr, e) } %prec UNARY
-|	e = expression DECR { EUnary(PostDecr, e) }
+|	e = lunop { e }
+|	e = unop INCR { EUnary(PostIncr, e) }
+|	e = unop DECR { EUnary(PostDecr, e) }
+;
+
+lunop:
+|	NOT e = lunop { EUnary(Not, e) }
+|	MINUS e = lunop { EUnary(Minus, e) }
+|	PLUS e = lunop { EUnary(Plus, e) }
+|	REF e = lunop { EUnary(Ref, e) }
+|	TIMES e = lunop { EUnary(Deref, e) }
+|	INCR e = lunop { EUnary(PreIncr, e) }
+|	DECR e = lunop { EUnary(PreDecr, e) }
+|	e = primary { e }
 ;

@@ -80,7 +80,7 @@ let rec expr_string = function
 	| ENull -> "NULL"
 	| EIdent(i) -> i
 	| EAssign(k, p) -> "(" ^ (expr_string k) ^ " = " ^ (expr_string p) ^ ")"
-	| ECall(e, f) -> (expr_string e) ^ (List.fold_left (fun x k -> x ^ ", " ^ (expr_string k)) "" f) ^ ")"
+	| ECall(e, f) -> (expr_string e) ^ "(" ^ (List.fold_left (fun x k -> x ^ ", " ^ (expr_string k)) "" f) ^ ")"
 	| EUnary(e, f) -> (unop_str e) ^ (expr_string f)
 	| EBinary(e1, o, e2) -> "(" ^ (expr_string e1) ^ " " ^ (binop_str o) ^ " " ^ (expr_string e2) ^ ")"
 
@@ -91,7 +91,7 @@ let rec print_stmt l x =
 	| SExpr(e) -> print_string ((expr_string e) ^ "\n")
 	| SIf(e, a, b) -> print_string ("if " ^ (expr_string e) ^ "\n");
 		print_stmt (l+1) a;
-		for i = 0 to l do print_string " " done;
+		for i = 1 to l do print_string " " done;
 		print_string "else\n";
 		print_stmt (l+1) b
 	| SWhile(e, a) -> print_string ("while " ^ (expr_string e) ^ "\n");
