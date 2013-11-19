@@ -224,7 +224,7 @@ expression:
 |	e1 = expression ASSIGN e2 = expression { EAssign(e1, e2) }
 |	a = expression b = binop c = expression { EBinary(a, b, c) }
 |	a = expression LPAREN arg = separated_list(COMMA, expression) RPAREN { ECall(a, arg) }
-|	a = unop { a }
+|	a = lunop { a }
 |	NEW c = TIDENT LPAREN args = separated_list(COMMA, expression) RPAREN { ENew(c, args) }
 ;
 
@@ -256,10 +256,10 @@ primary:
 |	a = primary DOT b = IDENT { EMember(a, b) }
 ;
 
-unop:
-|	e = lunop { e }
-|	e = unop INCR { EUnary(PostIncr, e) }
-|	e = unop DECR { EUnary(PostDecr, e) }
+runop:
+|	e = primary { e }
+|	e = runop INCR { EUnary(PostIncr, e) }
+|	e = runop DECR { EUnary(PostDecr, e) }
 ;
 
 lunop:
@@ -270,7 +270,7 @@ lunop:
 |	TIMES e = lunop { EUnary(Deref, e) }
 |	INCR e = lunop { EUnary(PreIncr, e) }
 |	DECR e = lunop { EUnary(PreDecr, e) }
-|	e = primary { e }
+|	e = runop { e }
 ;
 
 str_expression:
