@@ -79,7 +79,7 @@ let binop_str = function
 	| Modulo -> "%" | Land -> "&&" | Lor -> "||"
 let unop_str = function
 	| PreIncr -> "++." | PostIncr -> ".++" | PreDecr -> "--." | PostDecr -> ".--"
-	| Ref -> "&" | Deref -> "&" | Not -> "!" | Minus -> "-" | Plus -> "+"
+	| Ref -> "&" | Deref -> "*" | Not -> "!" | Minus -> "-" | Plus -> "+"
 let rec var_type_str = function
 	| TVoid -> "void" | TInt -> "int" | TIdent(i) -> i
 	| TPtr(k) -> "*" ^ (var_type_str k)
