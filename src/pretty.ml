@@ -84,7 +84,7 @@ let rec var_type_str = function
 	| TVoid -> "void" | TInt -> "int" | TIdent(i) -> i
 	| TPtr(k) -> "*" ^ (var_type_str k)
 	| TRef(k) -> "&" ^ (var_type_str k)
-let rec expr_string = function
+let rec expr_string e = match e.e_desc with
 	| EInt(i) -> string_of_int i
 	| EBool(b) -> (if b then "true" else "false")
 	| ENull -> "NULL"
@@ -99,7 +99,7 @@ let rec expr_string = function
 
 let rec print_stmt l x =
 	for i = 1 to l do print_string " " done;
-	match x with 
+	match x.s_desc with 
 	| SEmpty -> print_string ";\n"
 	| SExpr(e) -> print_string ((expr_string e) ^ "\n")
 	| SIf(e, a, b) -> print_string ("if " ^ (expr_string e) ^ "\n");
@@ -124,8 +124,9 @@ let rec print_stmt l x =
 		(i ^ " : " ^ (var_type_str t) ^ " = " ^ c ^ "(" ^
 			(csl expr_string a) ^ ")\n")
 	| SWriteCout(k) -> print_string ("std::cout" ^
-		(List.fold_left (fun x k -> x ^ " << " ^ (match k with
-				| SEExpr(k) -> expr_string k | SEStr("\n") -> "std::endl" | SEStr(s) -> "`" ^ s ^ "`")) "" k) ^ "\n")
+		(List.fold_left (fun x k -> x ^ " << " ^ (match k.se_desc with
+				| SEExpr(e) -> expr_string {e_loc = k.se_loc; e_desc = e}
+				| SEStr("\n") -> "std::endl" | SEStr(s) -> "`" ^ s ^ "`")) "" k) ^ "\n")
 and print_block n b =
 	let prefix = String.make n ' ' in
 	print_string (prefix ^ "{\n");

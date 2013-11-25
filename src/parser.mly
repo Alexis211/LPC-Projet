@@ -111,10 +111,19 @@ member:
 cls_proto:
 |	ident = typed_var
 	LPAREN args = separated_list(COMMA, typed_var) RPAREN
-	{ {p_ret_type = Some(fst ident); p_name = snd ident; p_class = None; p_args = args} }
+	{ {
+		p_ret_type = Some(fst ident);
+		p_name = snd ident;
+		p_class = None;
+		p_args = args;
+		p_loc = $startpos, $endpos } }
 |	cls = TIDENT
 	LPAREN args = separated_list(COMMA, typed_var) RPAREN
-	{ {p_ret_type = None; p_name = cls; p_class = Some cls; p_args = args} }
+	{ {p_ret_type = None;
+		p_name = cls;
+		p_class = Some cls;
+		p_args = args;
+		p_loc = $startpos, $endpos } }
 ;
 
 proto:
@@ -122,11 +131,11 @@ proto:
 	LPAREN args = separated_list(COMMA, typed_var) RPAREN
 	{
 		let ty, cl, na = ident in
-		{ p_ret_type = Some ty; p_name = na; p_class = cl; p_args = args} }
+		{ p_ret_type = Some ty; p_name = na; p_class = cl; p_args = args; p_loc = $startpos, $endpos } }
 |	cls = TIDENT DOUBLECOLON cls2 = TIDENT
 	LPAREN args = separated_list(COMMA, typed_var) RPAREN
 	{
-		{p_ret_type = None; p_name = cls2; p_class = Some cls; p_args = args}
+		{p_ret_type = None; p_name = cls2; p_class = Some cls; p_args = args; p_loc = $startpos, $endpos}
 	}
 ;
 
@@ -175,9 +184,12 @@ block:
 ;
 
 statement:
+|	d = statement_desc { { s_loc = $startpos, $endpos; s_desc = d } }
+;
+statement_desc:
 |	k = common_statement { k }
 |	IF LPAREN c = expression RPAREN s = statement
-	{ SIf(c, s, SEmpty) }
+	{ SIf(c, s, { s_loc = $startpos, $endpos; s_desc = SEmpty}) }
 |	IF LPAREN c = expression RPAREN s = no_if_statement ELSE t = statement
 	{ SIf(c, s, t) }
 |	WHILE LPAREN c = expression RPAREN s = statement
@@ -190,6 +202,9 @@ statement:
 ;
 
 no_if_statement:
+|	d = no_if_statement_desc { { s_loc = $startpos, $endpos; s_desc = d } }
+;
+no_if_statement_desc:
 |	WHILE LPAREN c = expression RPAREN s = no_if_statement
 	{ SWhile(c, s) }
 |	FOR LPAREN k = separated_list(COMMA, expression) SEMICOLON
@@ -221,10 +236,14 @@ common_statement:
 ;
 
 expression:
+|	e = expression_desc
+	{ { e_loc = $startpos, $endpos; e_desc = e } }
+|	l = lunop { l }
+;
+expression_desc:
 |	e1 = expression ASSIGN e2 = expression { EAssign(e1, e2) }
 |	a = expression b = binop c = expression { EBinary(a, b, c) }
 |	a = expression LPAREN arg = separated_list(COMMA, expression) RPAREN { ECall(a, arg) }
-|	a = lunop { a }
 |	NEW c = TIDENT LPAREN args = separated_list(COMMA, expression) RPAREN { ENew(c, args) }
 ;
 
@@ -245,24 +264,41 @@ expression:
 ;
 
 primary:
+|	LPAREN e = expression RPAREN
+	{ { e_loc = $startpos, $endpos; e_desc = e.e_desc } }
+|	k = primary_desc
+	{ { e_loc = $startpos, $endpos; e_desc = k } }
+;
+primary_desc:
 |	NULL { ENull }
 |	THIS { EThis }
 |	i = INTVAL { EInt(i) }
 |	TRUE { EBool(true) }
 |	FALSE { EBool(false) }
 |	i = IDENT { EIdent(i) }
-|	LPAREN e = expression RPAREN { e }
-|	a = primary RARROW b = IDENT { EMember(EUnary(Deref, a), b) }
-|	a = primary DOT b = IDENT { EMember(a, b) }
+|	a = primary RARROW b = IDENT
+	{ EMember(
+		{ e_loc = $startpos, $endpos; e_desc = EUnary(Deref, a)}
+		, b) }
+|	a = primary DOT b = IDENT
+	{ EMember(a, b) }
 ;
 
 runop:
-|	e = primary { e }
+|	e = runop_desc { { e_loc = $startpos, $endpos; e_desc = e } }
+|	p = primary { p }
+;
+runop_desc:
 |	e = runop INCR { EUnary(PostIncr, e) }
 |	e = runop DECR { EUnary(PostDecr, e) }
 ;
 
 lunop:
+|	e = lunop_desc
+	{ { e_loc = $startpos, $endpos; e_desc = e } }
+|	k = runop { k }
+;
+lunop_desc:
 |	NOT e = lunop { EUnary(Not, e) }
 |	MINUS e = lunop { EUnary(Minus, e) }
 |	PLUS e = lunop { EUnary(Plus, e) }
@@ -270,10 +306,9 @@ lunop:
 |	TIMES e = lunop { EUnary(Deref, e) }
 |	INCR e = lunop { EUnary(PreIncr, e) }
 |	DECR e = lunop { EUnary(PreDecr, e) }
-|	e = runop { e }
 ;
 
 str_expression:
-|	e = expression { SEExpr(e) }
-|	s = STRVAL { SEStr(s) }
+|	e = expression { { se_loc = e.e_loc; se_desc = SEExpr(e.e_desc) } }
+|	s = STRVAL { { se_loc = $startpos, $endpos; se_desc = SEStr(s) } }
 ;
