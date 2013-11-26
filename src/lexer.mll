@@ -114,7 +114,7 @@ and strval s = parse
 	| _ as c				{ strval (s ^ (String.make 1 c)) lexbuf }
 	| eof					{ raise (Lexing_error "Unfinished string") }
 and short_comment = parse
-	| '\n'					{}
+	| '\n'					{ newline lexbuf }
 	| _						{ short_comment lexbuf }
 	| eof					{}
 and long_comment = parse
