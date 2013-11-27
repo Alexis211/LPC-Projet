@@ -17,8 +17,8 @@ let localisation pos =
 		!ifile l (c-1) c
 	
 let options = [
-	"-parse-only", Arg.Set parse_only, "Stops after parsing of the input file.";
-	"-dump", Arg.Set dump, "Dump the AST after parsing."
+	"--parse-only", Arg.Set parse_only, "Stops after parsing of the input file.";
+	"--dump", Arg.Set dump, "Dump the AST after parsing."
 	]
 
 let localisation pos =
@@ -52,6 +52,9 @@ let () =
 			eprintf "Lexical analysis error: %s@." s;
 			exit 1
 		| Parser.Error -> 
-		localisation (Lexing.lexeme_start_p buf);
-		eprintf "Parsing error.@.";
-		exit 1
+			localisation (Lexing.lexeme_start_p buf);
+			eprintf "Parsing error.@.";
+			exit 1
+		| _ ->
+			eprintf "Unexpected error...@.";
+			exit 2
