@@ -1,8 +1,8 @@
 open Ast
 
+(* Gestion des erreurs *)
 exception LocError of loc * string
 exception Error of string
-
 let er_ident i = raise (Error ("Unknown identifier " ^ i))
 let er_ident_loc i loc = raise (LocError (loc, "Unknown identifier " ^ i))
 let er_not_a_variable i = raise (Error ("Expected '"^i^"' to be a variable"))
@@ -11,6 +11,12 @@ let er_tident_use () = raise (Error ("Er_tident_use"))
 let er_double_ref () = raise (Error ("Er_double_ref"))
 let er_ref_use ()= raise (Error ("Er_ref_use"))
 let er_not_implemented () = raise (Error ("Not implemented"))
+let ty_assert x k = if not x then raise (Error (k))
+let ty_error k = raise (Error (k))
+
+(* AST typés *)
+
+module Smap = Map.Make(String)
 
 type typ =
   | T_Int
@@ -34,7 +40,7 @@ and texpr_desc =
   | TEIdent of ident
   | TEAssign of texpression * texpression
   | TECallFun of ident * texpression list (* changé : te -> ident *)
-(* | TECallMethod of texpression * ident * texpression list *) (* changé : te -> ident *)
+  | TECallMethod of texpression * ident * texpression list (* changé : te -> ident *)
   | TEUnary of unop * texpression
   | TEBinary of texpression * binop * texpression
   | TEMember of texpression * ident
@@ -43,8 +49,6 @@ and texpr_desc =
 type tstr_expression =
 	| TSEExpr of texpression
 	| TSEStr of string
-
-module Smap = Map.Make(String)
 
 
 type tstatement = {
@@ -176,44 +180,45 @@ and compute_type env e = match e.e_desc with (* expression -> te_desc,(typ,ref?,
     | ENull -> TENull, (Typenull,false,false)
     | EIdent i -> 
       (try let ty,b = find_v i env in (* pb avec (i,bool) *)
-	   assert (bf ty); (* règle champs p4 *)
+	  ty_assert (bf ty) "Malformed type"; (* règle champs p4 *)
 	   TEIdent i,(ty,b,true)
        with Not_found -> er_ident i
       )
     | EAssign (e1,e2) -> let te1,(ty1,_,b3) = get_expr0 env e1 in
 			 let te2,(ty2,_,_) = get_expr0 env e2 in
-			 assert (b3 = true);
-			 assert (num ty1); (* type num et ref compatibles ?*)
+			 ty_assert (b3 = true) "Can only assign to lvalue";
+			 ty_assert (num ty1) "Cannot assign to non-numeric type (pointer type is numeric)";
+			 		(* type num et ref compatibles ?*)
 			 (TEAssign (te1,te2) ),(ty1,false,false)
     | EUnary (op,e) -> let te,(ty,b1,b2) = get_expr0 env e in
 		       (match op with
 			 | PreIncr | PostIncr | PreDecr | PostDecr ->
-			   assert (b2 = true);
-			   assert (ty = T_Int);
+			   ty_assert (b2 = true) "Can only increment/decrement lvalue";
+			   ty_assert (ty = T_Int) "Can only increment/decrement integers";
 			   TEUnary(op,te),(T_Int,b1,false)
 			 | Plus | Minus | Not ->
-			   assert (ty = T_Int);
+			   ty_assert (ty = T_Int) "Can only apply unary plus/minus/not to integers";
 			   TEUnary(op,te),(T_Int,false,false)
 			 | Ref ->
-			   assert b2;
+			   ty_assert b2 "Can only reference lvalues";
 			   TEUnary(op,te),(TPoint ty,false,false) (* verif *)
 			 | Deref ->
 			   let t = (match ty with
 			     | TPoint t -> t
-			     | _ -> failwith "On attend un type pointeur"   ) in
+			     | _ -> ty_error "Can only dereference pointer"   ) in
 			   TEUnary(op,te), (t,true,false)
 		       )
     | EBinary (e1,op,e2) -> let te1,(ty1,_,b1) = get_expr0 env e1 in
 			    let te2,(ty2,_,b2) = get_expr0 env e2 in
 			    (match op with
 			      | Equal | NotEqual -> 
-				assert (ty1 = ty2);
-				assert (num ty1)
+					ty_assert (ty1 = ty2) "Can only apply == or != to two values of same type";
+					ty_assert (num ty1) "Can only apply == or != to pointers"
 			      | Lt | Le | Gt | Ge
 			      | Add | Sub | Mul | Div | Modulo
 			      | Land | Lor ->
-				assert (ty1 = T_Int);
-				assert (ty2 = T_Int)
+					ty_assert (ty1 = T_Int) "Left operand of binop is not integer";
+					ty_assert (ty2 = T_Int) "Right operand of binop is not integer"
 			    ); (* vérifs *)
 			    TEBinary(te1,op,te2),(T_Int,false,false)
     | ECall (e,e_list) -> let name = (match e.e_desc with
@@ -225,7 +230,7 @@ and compute_type env e = match e.e_desc with (* expression -> te_desc,(typ,ref?,
 			  let tab = Array.of_list args in
 			  List.iteri 
 			    (fun j (te,(ty0,b)) -> 
-			      assert (ty0 = tab.(j) )   )
+			      ty_assert (ty0 = tab.(j)) "Invalid type for function argument" )
 			    l ;
 			  (* vérif ici pour adresse/valeur, ici on test seulement
 			     que ce sont les mêmes types, pas d'adressage de pris en compte *)
