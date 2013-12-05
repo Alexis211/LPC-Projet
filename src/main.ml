@@ -47,11 +47,13 @@ let () =
 
 	try
 		let p = Parser.prog Lexer.token buf in
-		let t = Typing.prog p in
 		close_in f;
 		
 		if !dump then Pretty.print_prog p;
-		if !dumpt then Pretty_typing.print_prog t;
+		if not !parse_only then begin
+			let t = Typing.prog p in
+			if !dumpt then Pretty_typing.print_prog t;
+		end
 	with
 		| Lexer.Lexing_error s ->
 			localisation (Lexing.lexeme_start_p buf);
@@ -63,7 +65,7 @@ let () =
 			exit 1
 		| Typing.Error (loc, msg) ->
 		  localisation2 loc;
-		  eprintf "%s" msg;
+		  eprintf "%s@." msg;
 		  exit 1
 		  
 		| _ ->

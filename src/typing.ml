@@ -29,7 +29,7 @@ and texpr_desc =
   | TEIdent of ident
   | TEAssign of texpression * texpression
   | TECallFun of ident * texpression list (* changé : te -> ident *)
-(* | TECallMeth of texpression * ident * texpression list *) (* changé : te -> ident *)
+(* | TECallMethod of texpression * ident * texpression list *) (* changé : te -> ident *)
   | TEUnary of unop * texpression
   | TEBinary of texpression * binop * texpression
   | TEMember of texpression * ident
@@ -66,11 +66,6 @@ and ts_desc =
 (* Type of variable, variable name, constructor class name, constructor arguments *)
 	| TSWriteCout of tstr_expression list
 and tblock = tstatement list
-
-(*and fun_type = {
-  f_args : type_ref list; 
-  f_block : tblock; }
-peut être effacé *)
 
 and tproto = {
 	tp_loc : loc;

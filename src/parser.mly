@@ -109,12 +109,13 @@ member:
 ;
 
 cls_proto:
-|	ident = typed_var
+|	ident = typed_qvar
 	LPAREN args = separated_list(COMMA, typed_var) RPAREN
-	{ {
-		p_ret_type = Some(fst ident);
-		p_name = snd ident;
-		p_class = None;
+	{
+		let (vt, vc, vn) = ident in	{
+		p_ret_type = Some(vt);
+		p_name = vn;
+		p_class = vc;
 		p_args = args;
 		p_loc = $startpos, $endpos } }
 |	cls = TIDENT

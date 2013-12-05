@@ -3,3 +3,4 @@ int main() {
   int *s;
   s = NULL;
 }
+
