@@ -1,186 +1,158 @@
+(* Bibliothèque pour produire du code MIPS
 
-type register =
-  | ZERO | A0 | A1 | A2 | V0 | T0 | T1 | T2 | S0 | RA | SP | FP
-
-type address =
-  | Alab of string
-  | Areg of int * register
-
-type operand =
-  | Oimm of int
-  | Oreg of register
-
-type arith = Add | Sub | Mul | Div | Rem
-
-type condition = Eq | Ne | Le | Lt | Ge | Gt
-
-type label = string
-
-type instruction =
-  | Move of register * register
-  | Li of register * int
-  | Li32 of register * int32
-  | La of register * label
-  | Lw of register * address
-  | Sw of register * address
-  | Lb of register * address
-  | Sb of register * address
-  | Arith of arith * register * register * operand
-  | Neg of register * register
-  | Set of condition * register * register * operand
-  | B of label
-  | Beq of register * register * label
-  | Beqz of register * label
-  | Bnez of register * label
-  | J of string
-  | Jal of string
-  | Jr of register
-  | Jalr of register
-  | Syscall
-  | Label of string
-  | Inline of string
-
-type word = Wint of int | Waddr of string
-
-type data =
-  | Asciiz of string * string
-  | Word of string * word list
-  | Space of string * int
-  | Align of int
-
-type code =
-  | Clist of instruction list
-  | Capp of code * code
-
-let nop = Clist []
-
-let mips l = Clist l
-
-let inline s = Clist [Inline s]
-
-let (++) c1 c2 = Capp (c1, c2)
-
-type program = {
-  text : code;
-  data : data list;
-}
+   2008 Jean-Christophe Filliâtre (CNRS)
+   2013 Kim Nguyen (Université Paris Sud)
+*)
 
 open Format
 
-let print_register fmt = function
-  | ZERO -> pp_print_string fmt "$0"
-  | A0 -> pp_print_string fmt "$a0"
-  | A1 -> pp_print_string fmt "$a1"
-  | A2 -> pp_print_string fmt "$a2"
-  | V0 -> pp_print_string fmt "$v0"
-  | T0 -> pp_print_string fmt "$t0"
-  | T1 -> pp_print_string fmt "$t1"
-  | T2 -> pp_print_string fmt "$t2"
-  | S0 -> pp_print_string fmt "$s0"
-  | RA -> pp_print_string fmt "$ra"
-  | SP -> pp_print_string fmt "$sp"
-  | FP -> pp_print_string fmt "$fp"
+type register =  string
+let v0 : register = "$v0"
+let v1 : register = "$v1"
+let a0 : register = "$a0"
+let a1 : register = "$a1"
+let a2 : register = "$a2"
+let a3 : register = "$a3"
+let t0 : register = "$t0"
+let t1 : register = "$t1"
+let t2 : register = "$t2"
+let t3 : register = "$t3"
+let s0 : register = "$s0"
+let s1 : register = "$s1"
+let ra : register = "$ra"
+let sp : register = "$sp"
+let fp : register = "$fp"
+let gp : register = "$gp"
+let zero : register = "$zero"
 
-let print_arith fmt = function
-  | Add -> pp_print_string fmt "add"
-  | Sub -> pp_print_string fmt "sub"
-  | Mul -> pp_print_string fmt "mul"
-  | Div -> pp_print_string fmt "div"
-  | Rem -> pp_print_string fmt "rem"
+type label = string
+type 'a address = formatter -> 'a -> unit
+let alab : label address = fun fmt  (s : label) -> fprintf fmt "%s" s
+let areg : (int * register) address = fun fmt (x, y) -> fprintf fmt "%i(%s)" x y
+type 'a operand = formatter -> 'a -> unit
+let oreg : register operand = fun fmt (r : register) -> fprintf fmt "%s" r
+let oi : int operand = fun fmt i -> fprintf fmt "%i" i
+let oi32 : int32 operand = fun fmt i -> fprintf fmt "%li" i
 
-let print_condition fmt = function
-  | Eq -> pp_print_string fmt "seq"
-  | Ne -> pp_print_string fmt "sne"
-  | Lt -> pp_print_string fmt "slt"
-  | Le -> pp_print_string fmt "sle"
-  | Gt -> pp_print_string fmt "sgt"
-  | Ge -> pp_print_string fmt "sge"
+type 'a asm =
+  | Nop
+  | S of string
+  | Cat of 'a asm * 'a asm
 
-let print_address fmt = function
-  | Alab s -> pp_print_string fmt s
-  | Areg (ofs, r) -> fprintf fmt "%d(%a)" ofs print_register r
+type text = [`text ] asm
+type data = [`data ] asm
 
-let print_operand fmt = function
-  | Oimm i -> pp_print_int fmt i
-  | Oreg r -> print_register fmt r
+let buf = Buffer.create 17
+let fmt = formatter_of_buffer buf
+let ins x =
+  Buffer.add_char buf '\t';
+  kfprintf (fun fmt ->
+    fprintf fmt "\n";
+    pp_print_flush fmt ();
+    let s = Buffer.contents buf in
+    Buffer.clear buf;
+    S s
+  ) fmt x
 
-let print_instruction fmt = function
-  | Move (dst, src) ->
-      fprintf fmt "\tmove %a, %a\n" print_register dst print_register src
-  | Li (r, i) ->
-      fprintf fmt "\tli   %a, %d\n" print_register r i
-  | Li32 (r, i) ->
-      fprintf fmt "\tli   %a, %ld\n" print_register r i
-  | La (r, s) ->
-      fprintf fmt "\tla   %a, %s\n" print_register r s
-  | Lw (r, a) ->
-      fprintf fmt "\tlw   %a, %a\n" print_register r print_address a
-  | Sw (r, a) ->
-      fprintf fmt "\tsw   %a, %a\n" print_register r print_address a
-  | Lb (r, a) ->
-      fprintf fmt "\tlb   %a, %a\n" print_register r print_address a
-  | Sb (r, a) ->
-      fprintf fmt "\tsb   %a, %a\n" print_register r print_address a
-  | Arith (a, dst, src, op) ->
-      fprintf fmt "\t%a  %a, %a, %a\n"
-	print_arith a print_register dst print_register src print_operand op
-  | Neg (dst, src) ->
-      fprintf fmt "\tneg  %a, %a\n" print_register dst print_register src
-  | Set (cond, dst, src, op) ->
-      fprintf fmt "\t%a  %a, %a, %a\n"
-	print_condition cond print_register dst print_register src
-	print_operand op
-  | B l ->
-      fprintf fmt "\tb    %s\n" l
-  | Beq (r1, r2,  l) ->
-      fprintf fmt "\tbeq  %a, %a, %s\n" print_register r1 print_register r2 l
-  | Beqz (r, l) ->
-      fprintf fmt "\tbeqz %a, %s\n" print_register r l
-  | Bnez (r, l) ->
-      fprintf fmt "\tbnez %a, %s\n" print_register r l
-  | J s ->
-      fprintf fmt "\tj    %s\n" s
-  | Jal s ->
-      fprintf fmt "\tjal  %s\n" s
-  | Jalr r ->
-      fprintf fmt "\tjalr %a\n" print_register r
-  | Jr r ->
-      fprintf fmt "\tjr   %a\n" print_register r
-  | Syscall ->
-      fprintf fmt "\tsyscall\n"
-  | Label s ->
-      fprintf fmt "%s:\n" s
-  | Inline s ->
-      fprintf fmt "%s" s
+let pr_list fmt pr = function
+  | []      -> ()
+  | [i]     -> pr fmt i
+  | i :: ll -> pr fmt i; List.iter (fun i -> fprintf fmt ", %a" pr i) ll
 
-let rec print_code fmt = function
-  | Clist l -> List.iter (print_instruction fmt) l
-  | Capp (c1, c2) -> print_code fmt c1; print_code fmt c2
+let pr_ilist fmt l =
+  pr_list fmt (fun fmt i -> fprintf fmt "%i" i) l
 
-let print_word fmt = function
-  | Wint n -> pp_print_int fmt n
-  | Waddr s -> pp_print_string fmt s
+let pr_alist fmt l =
+  pr_list fmt (fun fmt (a : label) -> fprintf fmt "%s" a) l
 
-let rec print_list print fmt = function
-  | [] -> ()
-  | [x] -> print fmt x
-  | x :: r -> fprintf fmt "%a, %a" print x (print_list print) r
+let abs a b = ins "abs %s, %s" a b
+let add a b (o : 'a operand) x = ins "add %s, %s, %a" a b o x
+let clz a b = ins "clz %s, %s" a b
+let and_ a b c = ins "and %s, %s, %s" a b c
+let div a b (o : 'a operand) x = ins "div %s, %s, %a" a b o x
+let mul a b (o : 'a operand) x = ins "mul %s, %s, %a" a b o x
+let or_ a b c = ins "or %s, %s, %s" a b c
+let not_ a b = ins "not %s, %s" a b
+let rem a b (o : 'a operand) x = ins "rem %s, %s, %a" a b o x
+let neg a b = ins "neg %s, %s" a b
+let sub a b (o : 'a operand) = ins "sub %s, %s, %a" a b o
+let li a b = ins "li %s, %i" a b
+let li32 a b = ins "li %s, %li" a b
+let seq a b c = ins "seq %s, %s, %s" a b c
+let sge a b c = ins "sge %s, %s, %s" a b c
+let sgt a b c = ins "sgt %s, %s, %s" a b c
+let sle a b c = ins "sle %s, %s, %s" a b c
+let slt a b c = ins "slt %s, %s, %s" a b c
+let sne a b c = ins "sne %s, %s, %s" a b c
+let b (z : label) = ins "b %s" z
+let beq x y (z : label) = ins "beq %s, %s, %s" x y z
+let bne x y (z : label) = ins "bne %s, %s, %s" x y z
+let bge x y (z : label) = ins "bge %s, %s, %s" x y z
+let bgt x y (z : label) = ins "bgt %s, %s, %s" x y z
+let ble x y (z : label) = ins "ble %s, %s, %s" x y z
+let blt x y (z : label) = ins "blt %s, %s, %s" x y z
 
-let print_data fmt = function
-  | Asciiz (l, s) ->
-      fprintf fmt "%s:\n\t.asciiz %S\n" l s
-  | Word (l, n) ->
-      fprintf fmt "%s:\n\t.word %a\n" l (print_list print_word) n
-  | Space (l, n) ->
-      fprintf fmt "%s:\n\t.space %d\n" l n
-  | Align n ->
-      fprintf fmt "\t.align %d\n" n
+let beqz x (z : label) = ins "beqz %s, %s" x z
+let bnez x (z : label) = ins "bnez %s, %s" x z
+let bgez x (z : label) = ins "bgez %s, %s" x z
+let bgtz x (z : label) = ins "bgtz %s, %s" x z
+let blez x (z : label) = ins "blez %s, %s" x z
+let bltz x (z : label) = ins "bltz %s, %s" x z
+
+let jr a = ins "jr %s" a
+let jal (z : label) = ins "jal %s" z
+let jalr (z : register) = ins "jalr %s" z
+let la x (p : 'a address)  = ins "la %s, %a" x p
+let lb x (p : 'a address) = ins "lb %s, %a" x p
+let lbu x (p : 'a address) = ins "lbu %s, %a" x p
+let lw x (p : 'a address) = ins "lw %s, %a" x p
+let sb x (p : 'a address) = ins "sb %s, %a" x p
+let sw x (p : 'a address) = ins "sw %s, %a" x p
+let move a b = ins "move %s, %s" a b
+let nop = Nop
+let label (s : label) = S (s ^ ":\n")
+let syscall = S "\tsyscall\n"
+let comment s = S ("#" ^ s ^ "\n")
+let align n = ins ".align %i" n
+let asciiz s = ins ".asciiz %S" s
+let dword l = ins ".word %a" pr_ilist l
+let address l = ins ".word %a" pr_alist l
+let (++) x y = Cat (x, y)
+
+
+let push r =
+  sub sp sp oi 4 ++
+  sw r areg (0, sp)
+
+let peek r =
+  lw r areg (0, sp)
+
+let pop r =
+  peek r ++
+  add sp sp oi 4
+
+let popn n =
+  add sp sp oi n
+
+type program = {
+  text : [ `text ] asm;
+  data : [ `data ] asm;
+}
+
+let rec pr_asm fmt = function
+  | Nop          -> ()
+  | S s          -> fprintf fmt "%s" s
+  | Cat (a1, a2) -> pr_asm fmt a1; pr_asm fmt a2
 
 let print_program fmt p =
-  fprintf fmt "\t.text\n";
-  print_code fmt p.text;
-  fprintf fmt "\t.data\n";
-  List.iter (print_data fmt) p.data;
-  fprintf fmt "@."
+  fprintf fmt ".text\n";
+  pr_asm fmt p.text;
+  fprintf fmt ".data\n";
+  pr_asm fmt p.data;
+  pp_print_flush fmt ()
 
-
+let print_in_file ~file p =
+  let c = open_out file in
+  let fmt = formatter_of_out_channel c in
+  print_program fmt p;
+  close_out c
