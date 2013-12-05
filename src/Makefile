@@ -10,3 +10,5 @@ main.byte: main.ml ast.ml parser.mly lexer.mll pretty.ml
 
 clean:
 	rm -r _build
+	rm main.byte
+	rm $(BIN)
