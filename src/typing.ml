@@ -1,10 +1,16 @@
 open Ast
 
-exception Er_ident of ident (* i n'a pas de type, semble impossible au parser *)
-exception Er_tident_use
-exception Er_double_ref
-exception Er_ref_use
-exception Error of loc * string
+exception LocError of loc * string
+exception Error of string
+
+let er_ident i = raise (Error ("Unknown identifier " ^ i))
+let er_ident_loc i loc = raise (LocError (loc, "Unknown identifier " ^ i))
+let er_not_a_variable i = raise (Error ("Expected '"^i^"' to be a variable"))
+let er_not_a_function i = raise (Error ("Expected '"^i^"' to be a function"))
+let er_tident_use () = raise (Error ("Er_tident_use"))
+let er_double_ref () = raise (Error ("Er_double_ref"))
+let er_ref_use ()= raise (Error ("Er_ref_use"))
+let er_not_implemented () = raise (Error ("Not implemented"))
 
 type typ =
   | T_Int
@@ -21,7 +27,6 @@ type texpression = {
   te_desc: texpr_desc;
   type_expr : typ*bool*bool; (* Type, référence?, valeur gauche? *)
 }
-
 and texpr_desc =
   | TEInt of int
   | TENull
@@ -35,23 +40,17 @@ and texpr_desc =
   | TEMember of texpression * ident
   | TENew of tident * texpression list
 
-type type_and_string =
-  | Typ of type_ref
-  | String
-
-
 type tstr_expression =
 	| TSEExpr of texpression
 	| TSEStr of string
 
-module Tstm = Map.Make(String) (* string -> env *)
+module Smap = Map.Make(String)
 
-type stmt = mem Tstm.t
 
-and tstatement = {
+type tstatement = {
 	ts_loc: loc;
 	ts_desc: ts_desc;
-	type_stm : stmt; }
+	}
 and ts_desc =
 	| TSEmpty
 	| TSExpr of texpression
@@ -75,12 +74,11 @@ and tproto = {
 	tp_args : (type_ref * ident) list;
 }
 
-and mem = (* type d'une expression *)
+type mem = (* type d'une expression *)
   | Var of type_ref
   | Fun of tproto * tblock
   | Env of stmt (* statement type *)
-
-module Tmem = Map.Make(String) (* string -> mem *)
+and stmt = mem Smap.t (* string -> env *)
 
 type tcls_mem =
 	| TCVar of var_type * ident
@@ -104,26 +102,25 @@ type tprogram = tdeclaration list
 (* Quelques fonctions utiles : *)
 
 let find_v i env =
-  match Tmem.find i env with
+  match Smap.find i env with
     | Var tr -> tr
-    | _ -> failwith "N'est pas une variable définie"
+    | _ -> er_not_a_variable i
 
 let find_f i env =
-  match Tmem.find i env with
+  match Smap.find i env with
     | Fun (p,t) -> (p,t)
-    | _ -> failwith "N'est pas une fonction définie"
+	| _ -> er_not_a_function i
 
 let same_type t1 t2 = (* types mem *)
   let tr1 = (match t1 with
     | Var (typ,_) -> typ
-    | _ -> failwith "Pas un type de variable"  ) in
+	| _ -> er_not_a_variable "") in
   let tr2 = (match t2 with
    | Var (typ,_) -> typ
-    | _ -> failwith "Pas un type de variable"  ) in
+   | _ -> er_not_a_variable "") in
   tr1 = tr2
 
-(* true si bien formé *)
-let rec bf = function
+let rec bf = function			(* true si bien formé *)
   | T_Int -> true
   | TClass _ -> true
   | TPoint t -> bf t
@@ -142,11 +139,11 @@ let build_type_or_ref vt = (* vt -> typ,bool = tr, true si ref *)
     | TPtr vt -> TPoint (see vt)
     | TVoid -> T_Void
     | TInt -> T_Int
-    | TRef _ -> raise Er_ref_use
-    | TIdent tid -> raise Er_tident_use
+    | TRef _ -> er_ref_use()
+    | TIdent tid -> TClass tid
   in
   match vt with
-    | TRef (TRef vt) -> raise Er_double_ref (* ... *)
+    | TRef (TRef vt) -> er_double_ref() (* ... *)
     | TRef vt -> (see vt),true (* indique qu'il s'agit d'une ref *)
     | vt -> (see vt),false
 
@@ -157,8 +154,10 @@ let rec type_expr env e = (* expression -> texpression *)
   try 
     let d,(ty,b1,b2) = compute_type env e in
     { te_loc = e.e_loc; te_desc = d; type_expr = (ty,b1,b2) }
-  with | Er_ident i -> raise (Error (e.e_loc,("Type of variable "^i^" not declared")))
-    | _ -> raise (Error (e.e_loc,"Other"))
+  with
+  	| Error(k) -> raise (LocError(e.e_loc, k))
+	| LocError(_, _) as e -> raise e
+    | _ -> raise (LocError (e.e_loc,"Other error"))
 
 and get_expr0 env e = (* expression -> texpression,(ty,b1,b2) *)
   let te = type_expr env e in
@@ -179,7 +178,7 @@ and compute_type env e = match e.e_desc with (* expression -> te_desc,(typ,ref?,
       (try let ty,b = find_v i env in (* pb avec (i,bool) *)
 	   assert (bf ty); (* règle champs p4 *)
 	   TEIdent i,(ty,b,true)
-       with Not_found -> raise (Er_ident i)
+       with Not_found -> er_ident i
       )
     | EAssign (e1,e2) -> let te1,(ty1,_,b3) = get_expr0 env e1 in
 			 let te2,(ty2,_,_) = get_expr0 env e2 in
@@ -240,25 +239,12 @@ and compute_type env e = match e.e_desc with (* expression -> te_desc,(typ,ref?,
     | ENew _ -> TEInt 0, (T_Int,false,false)
     | EThis -> TEInt 0, (T_Int,false,false)
 
-(* let compute_type_str_expr env e = (* str_expression -> (tse_str*)
-    match e.se_desc with
-    | SEExpr e0 -> let te,(t,b,_) = compute_type env {e_loc = e.se_loc; e_desc = e0} in
-		   (TSEExpr te),(Typ (t,b))
-    | SEStr s -> (TSEStr s),String
-
-let type_str_expr env e = (* str_expression -> tstr_expression *)
-  let t_str_te,ty = compute_type_str_expr env e in
-  { tse_loc = e.se_loc; tse_desc = t_str_te; type_str = ty }*)
 
 (* Statements *)
 
 let rec type_stm env s = 
   let d, ty = compute_type_stm env s in
-  { ts_loc = s.s_loc; ts_desc = d; type_stm = ty }
-
-and get_stm env s = (* statement -> tstatement,tstm *)
-  let ts = type_stm env s in
-  (ts,ts.type_stm)
+  { ts_loc = s.s_loc; ts_desc = d }, ty
 
 and compute_type_stm env s = match s.s_desc with (* statement -> ts_desc,stm_type *)
   | SEmpty -> TSEmpty,env
@@ -269,8 +255,8 @@ and compute_type_stm env s = match s.s_desc with (* statement -> ts_desc,stm_typ
   | SReturn (Some e0) ->  let te,(ty,_) = get_expr env e0 in
 			  TSReturn (Some te), env 
   | SIf (e,s1,s2) ->  let te,(ty,_) = get_expr env e in
-		      let ts1,ty1 = get_stm env s1 in (* vérifs règle *)
-		      let ts2,ty2 = get_stm env s2 in
+		      let ts1,ty1 = type_stm env s1 in (* vérifs règle *)
+		      let ts2,ty2 = type_stm env s2 in
 		      assert (ty = T_Int);
 		      (TSIf (te,ts1,ts2)) , env		    
   | SFor (el1,eopt,el3,s) -> let tel1 = List.map (type_expr env) el1 in (* et fait les vérifs pr e1 et e3 ? *)
@@ -281,25 +267,25 @@ and compute_type_stm env s = match s.s_desc with (* statement -> ts_desc,stm_typ
 					   assert (ty = T_Int);
 					   Some te) 
 			     in
-			     ignore( get_stm env s );  (* vérifie i *)
-			     let ts = type_stm env s in (* fait le truc d'avant aussi *)
+			     ignore( type_stm env s );  (* vérifie i *)
+			     let ts, _ = type_stm env s in (* fait le truc d'avant aussi *)
 			     TSFor (tel1,teopt,tel3,ts) , env
   (* traduire règles restantes du for*)
-  | SWhile(e,s) -> let ts,tys = get_stm env s in
+  | SWhile(e,s) -> let ts,tys = type_stm env s in
 		   let te,(ty,_) = get_expr env e in
 		   TSWhile(te,ts),env
   (* pq while n'est pas dans les règles données ? *)
   | SDeclare(vt,i) -> let ty,b = build_type_or_ref vt in
 		      assert (bf ty);
-		      assert (not (Tmem.mem i env) );
-		      let env0 = Tmem.add i (Var (ty,b)) env in
+		      assert (not (Smap.mem i env) );
+		      let env0 = Smap.add i (Var (ty,b)) env in
 		      TSDeclare( (ty,b) ,i) , env0
   | SDeclareAssignExpr(vt,i,e) -> let ty,b = build_type_or_ref vt in
 				  assert (bf ty);
-				  assert (not (Tmem.mem i env));
+				  assert (not (Smap.mem i env));
 				  let te,(tye,_) = get_expr env e in
 				 (* assert tye<ty;*)
-				  let env0 = Tstm.add i (Var (ty,b) ) env in
+				  let env0 = Smap.add i (Var (ty,b) ) env in
 				  TSDeclareAssignExpr( (ty,b) ,i,te) , env0
   | SWriteCout(str_e_list) -> 
     let args = 
@@ -316,7 +302,7 @@ and compute_type_stm env s = match s.s_desc with (* statement -> ts_desc,stm_typ
 		    
 and build_block env b = (* utilisé ds compute_type_stm et def_global_fun *)
   let two_stms (env,l) s =
-    let ts,ty = get_stm env s in
+    let ts,ty = type_stm env s in
     (ty,(ts::l)) in
   let ty_final,ts_list = List.fold_left two_stms (env,[]) b in 
   (* verif si b bien typé (règle i1;i2) et construit le te-block*)
@@ -331,9 +317,6 @@ and get_block env b =
  
 let get_fun env p b = (* p : proto   b : block -> name,Fun( ...)*)
   let name = p.p_name in
- (* let t = (match p.p_ret_type with
-    | Some ty -> ty
-    | None -> failwith "On traite les fonctions"  ) in*)
   let ty_args = 
     List.map (* liste des arguments tr*ident *)
       (fun (vt,i) -> let tr = build_type_or_ref vt in
@@ -352,7 +335,7 @@ pour traiter les ref, en fait fait quand on appelle sur proto.p_args *)
   List.iter (fun ((ty,_),_) -> assert( bf ty ) ) ty_args; 
 (* types st bf*)
   let contexte = List.fold_left (* tr = (ty,ref?) *)
-    (fun envir (tr,i) -> Tmem.add i (Var tr) envir)
+    (fun envir (tr,i) -> Smap.add i (Var tr) envir)
     env
     ty_args
   in (* contexte ds l'instruction *)
@@ -364,24 +347,22 @@ pour traiter les ref, en fait fait quand on appelle sur proto.p_args *)
 
 let compute_decl env = function
   | DGlobal(t,i) -> let tr = build_type_or_ref t in
-		    (TDGlobal(tr,i)) , (Tmem.add i (Var tr) env)
+		    (TDGlobal(tr,i)) , (Smap.add i (Var tr) env)
   (* on voudrait une liste de ident pr decl plsr en meme temps *)
   | DFunction (p,b) -> let name,tp,tb = get_fun env p b in
-		       (TDFunction (tp,tb) ) , (Tmem.add name (Fun (tp,tb)) env)
-  | DClass c -> TDNothing,env
+		       (TDFunction (tp,tb) ) , (Smap.add name (Fun (tp,tb)) env)
+  | DClass c -> er_not_implemented() (* TODO *)
 
 let prog p =
   let l = (
     List.fold_left 
       (fun list decl  -> let (td,env) = List.hd list in
 			 (compute_decl env decl)::list         )
-      [(TDNothing,Tmem.empty)]
+      [(TDNothing,Smap.empty)]
       p
   ) in
   List.map fst l
 
-(* raise (Error (e.e_loc,("Type of variable "^i^" not declared")))
-    | _ -> raise Error e.e_loc,("Other") *)
 
 
 

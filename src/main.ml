@@ -63,11 +63,14 @@ let () =
 		        localisation (Lexing.lexeme_start_p buf);
 			eprintf "Parsing error.@.";
 			exit 1
-		| Typing.Error (loc, msg) ->
+		| Typing.Error(msg) ->
+			eprintf "Typing error (unknown location): %s@." msg;
+			exit 2
+		| Typing.LocError (loc, msg) ->
 		  localisation2 loc;
 		  eprintf "%s@." msg;
-		  exit 1
+		  exit 2
 		  
 		| _ ->
 			eprintf "Unexpected error...@.";
-			exit 2
+			exit 3

@@ -34,3 +34,19 @@ for a in ../tests/exec/*.cpp; do
 		else echo "FAIL  $a";
 	fi;
 done;
+
+echo "---"
+echo "Testing TYPING/GOOD for typing"
+for a in ../tests/typing/good/*.cpp; do
+	if ./main.byte $a;
+		then echo "OK    $a";
+		else echo "FAIL  $a";
+	fi;
+done;
+
+for a in ../tests/typing/bad/*.cpp; do
+	if ./main.byte $a 2> /dev/null;
+		then echo "FAIL  $a";
+		else echo "OK    $a";
+	fi;
+done;
