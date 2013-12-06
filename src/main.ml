@@ -2,6 +2,7 @@ open Format
 open Lexing
 
 let parse_only = ref false
+let type_only = ref false
 let dump = ref false
 let dumpt = ref false
 
@@ -26,6 +27,7 @@ let localisation2 (pos1,pos2) =
 	
 let options = [
 	"--parse-only", Arg.Set parse_only, "Stops after parsing of the input file.";
+	"--type-only", Arg.Set type_only, "Stops after typechecking of the input file.";
 	"--dump", Arg.Set dump, "Dump the AST after parsing.";
 	"--dumpt", Arg.Set dumpt, "Dump the AST after typing."
 	]
@@ -53,6 +55,10 @@ let () =
 		if not !parse_only then begin
 			let t = Typing.prog p in
 			if !dumpt then Pretty_typing.print_prog t;
+
+			if not !type_only then begin
+				()
+			end
 		end
 	with
 		| Lexer.Lexing_error s ->

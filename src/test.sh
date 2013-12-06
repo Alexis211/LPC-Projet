@@ -36,7 +36,7 @@ for a in ../tests/exec/*.cpp; do
 done;
 
 echo "---"
-echo "Testing TYPING/GOOD for typing"
+echo "Testing TYPING/"
 for a in ../tests/typing/good/*.cpp; do
 	if ./main.byte $a;
 		then echo "OK    $a";
@@ -48,5 +48,14 @@ for a in ../tests/typing/bad/*.cpp; do
 	if ./main.byte $a 2> /dev/null;
 		then echo "FAIL  $a";
 		else echo "OK    $a";
+	fi;
+done;
+
+echo "---"
+echo "Testing EXEC/ only against typing"
+for a in ../tests/exec/*.cpp; do
+	if ./main.byte --type-only $a;
+		then echo "OK    $a";
+		else echo "FAIL  $a";
 	fi;
 done;

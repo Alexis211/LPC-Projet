@@ -152,7 +152,7 @@ let print_class_decl c =
 	print_string "}\n"
 
 let print_prog p =
-	List.iter (function
+	List.iter (fun k -> match k.d_desc with
 		| DGlobal(t, i) -> print_string ("decl " ^ i ^ " : " ^ (var_type_str t) ^ "\n")
 		| DFunction(p, b) -> print_string (proto_str p ^"\n");
 			print_block 0 b

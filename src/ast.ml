@@ -93,7 +93,10 @@ type cls = {
 	c_members : cls_mem list;
 }
 
-type declaration =
+type declaration = {
+	d_loc : loc;
+	d_desc : decl_desc; }
+and decl_desc =
 	| DGlobal of (var_type * ident)
 	| DFunction of (proto * block)
 	| DClass of cls

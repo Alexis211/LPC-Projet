@@ -71,19 +71,20 @@ prog:
 declaration:
 |	p = proto
 	b = block
-	{ [ DFunction(p, b) ] }
+	{ [ { d_loc = $startpos, $endpos; d_desc = DFunction(p, b) } ] }
 |	vars = typed_vars
 	SEMICOLON
-	{ List.map (fun k -> DGlobal(k)) vars }
+	{ List.map (fun k -> { d_loc = $startpos, $endpos; d_desc = DGlobal(k) }) vars }
 |	n = cls
 	s = supers? LBRACE PUBLIC COLON
 	m = member* RBRACE SEMICOLON
 	{
-		[ DClass({
-			c_name = n;
-			c_supers = s;
-			c_members = List.flatten m;
-		}) ]
+		[ { d_loc = $startpos, $endpos;
+			d_desc =DClass({
+				c_name = n;
+				c_supers = s;
+				c_members = List.flatten m;
+		}) } ]
 	}
 ;
 
