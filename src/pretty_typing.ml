@@ -105,12 +105,11 @@ let proto_str p =
 
 let print_prog p =
 	List.iter (function
-		| TDGlobal((ty,b),i) -> let addr = (if b then "&" else "") in
-					print_string ("decl " ^ addr ^ i ^ " : " ^ (var_type_str ty) ^ "\n")
+		| TDGlobal(ty,i) -> 
+					print_string ("decl " ^ i ^ " : " ^ (var_type_str ty) ^ "\n")
 		| TDFunction(p,b) -> print_string (proto_str p ^"\n");
 			print_block 0 b
 		| TDClass(c) -> () (* print_class_decl c  *)
-		| TDNothing -> ()
 		) 
-	  p
+	p.prog_decls
 

@@ -123,7 +123,7 @@ cls_proto:
 	LPAREN args = separated_list(COMMA, typed_var) RPAREN
 	{ {p_ret_type = None;
 		p_name = cls;
-		p_class = Some cls;
+		p_class = None;
 		p_args = args;
 		p_loc = $startpos, $endpos } }
 ;
