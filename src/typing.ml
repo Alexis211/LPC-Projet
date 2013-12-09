@@ -10,10 +10,10 @@ let err_add_loc loc f =
 	with
 		| Error(k) -> raise (LocError(loc, k))
 		| LocError(_, _) as e -> raise e
-		| Assert_failure (k, a, b) -> raise (LocError (loc, "Assertion failure : "^k^" at "^(string_of_int a)^":"^(string_of_int b)))
-		| Not_found -> raise (LocError (loc, "Not found"))
-		| Invalid_argument(k) -> raise (LocError (loc, "Invalid argument "^k))
-		| _ -> raise (LocError (loc, "Unexpected error"))
+		| Assert_failure (k, a, b) -> raise (LocError (loc, "(unexpected) Assertion failure: "^k^" at "^(string_of_int a)^":"^(string_of_int b)))
+		| Not_found -> raise (LocError (loc, "(unexpected) Not found"))
+		| Invalid_argument(k) -> raise (LocError (loc, "(unexpected) Invalid argument: "^k))
+		| _ -> raise (LocError (loc, "(unexpected) Other error")
 
 (* AST typés *)
 
