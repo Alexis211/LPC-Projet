@@ -66,7 +66,7 @@ let rec print_stmt l x =
 				  print_string (addr ^ i ^ " : " ^ (var_type_str ty) ^ "\n")
 	| TSDeclareAssignExpr((ty,b), i, e) -> let addr = (if b then "&" else "") in
 					  print_string (addr ^ i ^ " : " ^ (var_type_str ty) ^ " = " ^ (expr_string e) ^ "\n")
-	| TSDeclareAssignConstructor(t, i, c, a) -> () (*print_string
+	| TSDeclareAssignConstructor(t, i, _, c, a) -> () (*print_string
 		(i ^ " : " ^ (var_type_str t) ^ " = " ^ c ^ "(" ^
 							 (csl expr_string a) ^ ")\n")*)
 	| TSWriteCout(k) -> print_string ("std::cout" ^

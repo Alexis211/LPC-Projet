@@ -69,7 +69,7 @@ and ts_desc =
 	| TSReturn of texpression option
 	| TSDeclare of type_ref * ident
 	| TSDeclareAssignExpr of type_ref * ident * texpression
-	| TSDeclareAssignConstructor of type_ref * ident * tident * texpression list (* a faire *)
+	| TSDeclareAssignConstructor of typ * ident * tproto option * tident * texpression list (* a faire *)
 (* Type of variable, variable name, constructor class name, constructor arguments *)
 	| TSWriteCout of tstr_expression list
 and tblock = tstatement list
@@ -114,8 +114,8 @@ type tprogram = {
 
 (* Quelques fonctions utiles : *)
 
-let find_v i env =
-  try Smap.find i env.e_globals with Not_found -> ty_error ("No such global variable: " ^ i)
+let get_c env i =
+  try Smap.find i env.e_classes with Not_found -> ty_error ("No such class: " ^ i)
 
 let rec bf env t =
   let rec aux = function			(* true si bien formé *)
@@ -139,7 +139,7 @@ let build_type_or_ref vt = (* vt -> typ,bool = tr, true si ref *)
     | TPtr vt -> TPoint (see vt)
     | TVoid -> T_Void
     | TInt -> T_Int
-    | TRef _ -> ty_error ("Unexpected reference type - no pionters on references allowed")
+    | TRef _ -> ty_error ("Unexpected reference type - no pointers on references allowed")
     | TIdent tid -> TClass tid
   in
   match vt with
@@ -147,54 +147,33 @@ let build_type_or_ref vt = (* vt -> typ,bool = tr, true si ref *)
     | TRef vt -> (see vt),true (* indique qu'il s'agit d'une ref *)
     | vt -> (see vt),false
 
-let rec subtype_d env a b = match a, b with (* returns distance *)
-	| T_Int, T_Int -> true, 0
-	| T_Void, T_Void -> true, 0
-	| Typenull, TPoint(_) -> true, 0
-	| TPoint(ka), TPoint(kb) -> subtype_d env ka kb
+let rec subtype env a b = match a, b with
+	| T_Int, T_Int -> true
+	| T_Void, T_Void -> true
+	| Typenull, TPoint(_) -> true
+	| TPoint(ka), TPoint(kb) -> subtype env ka kb
 	| TClass(i), TClass(j) ->
-		if i = j then true, 0
-		else begin try let c = Smap.find i env.e_classes in
-			begin let d = ref None in
-			List.iter (fun s -> match subtype_d env (TClass s) (TClass j) with
-				| false, _ -> ()
-				| true, n -> d := match !d with | None -> Some n | Some d -> Some (if d < n then d else n))
-				c.tc_supers;
-			match !d with
-			| Some d -> true, d+1
-			| None -> false, 0
-			end
-		with | Not_found -> false, 0 end
-	| _ -> false, 0
-let subtype env a b = fst (subtype_d env a b)
-
+		if i = j then true
+		else let c = get_c env i in
+			List.exists (fun k -> subtype env (TClass k) (TClass j)) c.tc_supers
+	| _ -> false
 
 (* pour la surcharge de fonctions *)
 let closest_proto env arg_type_list fun_list =
-	let p = ref None in
-	List.iter (fun f ->
-		let proto = f in
-		try
-		let k = List.fold_left2
-			(fun d (t_a, t_a_ref) (t_p, t_p_ref) -> match d with
-				| None -> None
-				| Some d ->
-					if t_p_ref && (not t_a_ref) then None else
-					match subtype_d env t_a t_p with
-					| false, _ -> None
-					| true, d_a -> Some (d + d_a))
-			(Some 0) arg_type_list (List.map fst proto.tp_args) in
-		match k with
-		| None -> ()
-		| Some d -> match !p with
-			| None -> p := Some(d, f)
-			| Some(dd, _) -> if (d < dd) then p := Some(d, f)
-							else if (d = dd) then ty_error "Ambiguous overload"
-		with Invalid_argument _ -> ()) fun_list;
-	match !p with
-	| None -> None
-	| Some(_, f) -> Some f
-	
+	match List.filter
+		(fun proto ->
+			try List.for_all2
+				(fun (t_a, t_a_ref) (t_p, t_p_ref) ->
+					if t_p_ref && (not t_a_ref) then false else
+					subtype env t_a t_p)
+				arg_type_list (List.map fst proto.tp_args)
+			with Invalid_argument _ -> false)
+		fun_list
+	with
+	| [] -> ty_error "No corresponding prototype"
+	| [p] -> p
+	| _ -> ty_error "Ambiguous overload"
+
 
 (* -------------------------------------------- *)
 (* On passe aux choses sérieuses *)
@@ -214,10 +193,15 @@ and get_expr env e = (* expression -> texpression,(ty,b) *)
   (te,(ty,b))
 
 and compute_type env e =
+	let ttype = (TClass(match env.b_class with | Some c -> c.tc_name | None -> "#")) in
 	let e_this = 
-		{	te_loc = e.e_loc;
-			te_desc = TEThis;
-			type_expr = TClass(match env.b_class with | Some c -> c.tc_name | None -> "#"), false, true } in
+	{	te_loc = e.e_loc;
+		te_desc = TEThis;
+		type_expr = TPoint(ttype), false, true } in
+	let e_this_not_ptr =
+	{	te_loc = e.e_loc;
+		te_desc = TEUnary(Deref, e_this);
+		type_expr = ttype, false, true; } in
 	match e.e_desc with (* expression -> te_desc,(typ,ref?,left?) *)
     | EInt n -> TEInt n, (T_Int,false,false) 
     (* false, : pas une ref, pas une val gauche*)
@@ -231,7 +215,7 @@ and compute_type env e =
 		with Not_found ->
 			try match env.b_class with
 			| Some k -> let ty = Smap.find i k.tc_members in
-				TEMember(e_this, i),
+				TEMember(e_this_not_ptr, i),
 				 (ty, false, true)
 			| None -> raise Not_found
 		with Not_found ->
@@ -288,15 +272,13 @@ and compute_type env e =
 					| Some k ->
 						begin match List.filter (fun p -> p.tp_name = i) k.tc_methods with
 						| [] -> None, i, funs
-						| l -> Some e_this, i, l
+						| l -> Some e_this_not_ptr, i, l
 						end
 					end
 				| EMember(e, i) ->
 					let e = type_expr env e in
 					let c = match e.type_expr with
-					| TClass(k), a, b when a || b ->
-						begin try Smap.find k env.b_pe.e_classes with
-							Not_found -> ty_error ("Unknown class " ^ k ^ " (should not happen)") end
+					| TClass(k), a, b when a || b -> get_c env.b_pe k
 					| _ -> ty_error "Invalid argument type for method call (not a class, or not a lvalue)"
 					in
 					Some e, i, List.filter (fun p -> p.tp_name = i) (c.tc_methods)
@@ -307,43 +289,45 @@ and compute_type env e =
 			| l ->
 				(* handle overload *)
 			  let args_types = List.map (fun (e, (t, r, l)) -> t, r||l) args_values in
-			  let f = closest_proto env.b_pe args_types candidates in
-			  begin match f with
-			  | None -> ty_error "No corresponding function"
-			  | Some(p) -> p
-			  end
+			  closest_proto env.b_pe args_types candidates
 			in
-			  (* vérif ici pour adresse/valeur, ici on test seulement
-				 que ce sont les mêmes types, pas d'adressage de pris en compte *)
 			  let l_te = List.map fst args_values in 
-			  (* que les te de e_list*)
 			  let ty,b = match tproto.tp_ret_type with
-				| None -> assert false (* no return type only happens for constructors, and
-											constructors cannot be called as functions *)
+				| None -> ty_error "Constructor cannot be called as function"
 				| Some (ty,b) -> ty,b in
 			  TECallFun(name,l_te),(ty,b,false)
-    | EMember _ -> ty_error "Not implemented (member)"
-    | ENew (cls_name, args) -> 
-		begin try let c = Smap.find cls_name env.b_pe.e_classes in
-			let args_values = List.map (get_expr0 env) args in
-			  let args_types = List.map (fun (e, (t, r, l)) -> t, r||l) args_values in
-			let candidates = List.filter (fun p -> p.tp_ret_type = None) c.tc_methods in
-			match candidates with
-			| [] ->
-				ty_assert (args = []) "Only default constructor exists and it has 0 arguments";
-				TENew(c, None, []), (TPoint(TClass(cls_name)), false, false)
-			| _ ->
-				let proto = closest_proto env.b_pe args_types candidates in
-				match proto with
-				| Some (p) ->
-					(* closest_proto makes sure the prototypes match, no problem here *)
-					let l_te = List.map fst args_values in
-					TENew(c, Some p, l_te), (TPoint(TClass(cls_name)), false, false)
-				| None -> ty_error "No matching prototype"
-		with
-		| Not_found -> ty_error ("No such class: " ^ cls_name)
+    | EMember (e, id) ->
+		let e, (ty, r, l) = get_expr0 env e in
+		begin match ty with
+		| TClass(c_name) ->
+			let c = get_c env.b_pe c_name in
+			(* TODO : also look in super classes *)
+			begin try let mty = Smap.find id c.tc_members in
+				TEMember(e, id), (mty, false, true)
+			with | Not_found -> ty_error ("Class " ^ c_name ^ " has no member " ^ id)
+			end
+		| _ -> ty_error "Cannot get member of expression that is not a class"
 		end
-    | EThis -> ty_error "Not implemented (this)"
+    | ENew (cls_name, args) -> 
+		let c = get_c env.b_pe cls_name in
+		let args_values = List.map (get_expr0 env) args in
+		  let args_types = List.map (fun (e, (t, r, l)) -> t, r||l) args_values in
+		let candidates = List.filter (fun p -> p.tp_ret_type = None) c.tc_methods in
+		begin match candidates with
+		| [] ->
+			ty_assert (args = []) "Only default constructor exists and it has 0 arguments";
+			TENew(c, None, []), (TPoint(TClass(cls_name)), false, false)
+		| _ ->
+			let p = closest_proto env.b_pe args_types candidates in
+			(* closest_proto makes sure the prototypes match, no problem here *)
+			let l_te = List.map fst args_values in
+			TENew(c, Some p, l_te), (TPoint(TClass(cls_name)), false, false)
+		end
+    | EThis -> 
+		begin match env.b_class with
+		| Some c -> TEThis, (TPoint(TClass(c.tc_name)), false, true)
+		| None -> ty_error "Cannot use this outside of method"
+		end
 
 
 (* Statements *)
@@ -362,10 +346,10 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
   	let ty, ref = ret_type in
 	ty_assert (ty = T_Void) "Function must return non-void value";
   	(TSReturn None) , env
-  | SReturn (Some e0) ->  let te,(ty,r) = get_expr env e0 in
+  | SReturn (Some e0) ->  let te,(ty,r,l) = get_expr0 env e0 in
   		let rty, rref = ret_type in
   				ty_assert (rty = ty) "Invalid return type";
-				ty_assert (if rref then r else true) "Function must return reference";
+				ty_assert (if rref then r||l else true) "Function must return reference";
 			  TSReturn (Some te), env 
   | SIf (e,s1,s2) ->  let te,(ty,_) = get_expr env e in
 		      let ts1,ty1 = type_stm ret_type env s1 in (* vérifs règle *)
@@ -398,16 +382,16 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
 				b_class = env.b_class } in
 		      TSDeclare( (ty,b) ,i) , env0
   | SDeclareAssignExpr(vt,i,e) -> let ty,b = build_type_or_ref vt in
-				  ty_assert (bf env.b_pe ty) "Malformed type";
-				  ty_assert (not (Smap.mem i env.b_locals)) "Variable redefinition";
-				  let te,(tye,r,l) = get_expr0 env e in
-				  ty_assert (if b  then r || l else true) "Can only assigne lvalue/reference to reference type var";
-				  ty_assert (subtype env.b_pe tye ty) "Invalid data type for assign.";
-				  let env0 = 
-				  {	b_pe = env.b_pe;
-				  	b_locals = Smap.add i (ty,b) env.b_locals;
-					b_class = env.b_class } in
-				  TSDeclareAssignExpr( (ty,b) ,i,te) , env0
+		  ty_assert (bf env.b_pe ty) "Malformed type";
+		  ty_assert (not (Smap.mem i env.b_locals)) "Variable redefinition";
+		  let te,(tye,r,l) = get_expr0 env e in
+		  ty_assert (if b  then r || l else true) "Can only assigne lvalue/reference to reference type var";
+		  ty_assert (subtype env.b_pe tye ty) "Invalid data type for assign.";
+		  let env0 = 
+		  {	b_pe = env.b_pe;
+			b_locals = Smap.add i (ty,b) env.b_locals;
+			b_class = env.b_class } in
+		  TSDeclareAssignExpr( (ty,b) ,i,te) , env0
   | SWriteCout(str_e_list) -> 
     let args = 
       List.map
@@ -419,7 +403,26 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
 	str_e_list 
     in
     TSWriteCout(args) , env
-  | SDeclareAssignConstructor(vt,i,ti,e_l) -> ty_error "TODO"
+  | SDeclareAssignConstructor(vt,i,ti,e_l) ->
+		let ty, b = build_type_or_ref vt in
+		ty_assert (bf env.b_pe ty) "Malformed type";
+		ty_assert (not (Smap.mem i env.b_locals)) "Variable redefinition";
+		ty_assert (not b) "Cannot have reference on a newly created object";
+		ty_assert (ty = (TClass ti)) "Invalid type for constructor";
+		let c = get_c env.b_pe ti in
+		let args_values= List.map (get_expr0 env) e_l in
+		  let args_types = List.map (fun (e, (t, r, l)) -> t, r||l) args_values in
+		let candidates = List.filter (fun p -> p.tp_ret_type = None) c.tc_methods in
+		begin match candidates with
+		| [] ->
+			ty_assert (e_l = []) "Only default constructor exists and it has 0 arguments";
+			TSDeclareAssignConstructor(ty, i, None, ti, []), env
+		| _ ->
+			let p = closest_proto env.b_pe args_types candidates in
+			(* closest_proto makes sure the prototypes match, no problem here *)
+			let l_te = List.map fst args_values in
+			TSDeclareAssignConstructor(ty, i, Some p, ti, l_te), env
+		end
 		    
 and build_block ret_type env b = (* utilisé ds compute_type_stm et def_global_fun *)
   let two_stms (env,l) s =

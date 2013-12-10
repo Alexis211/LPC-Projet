@@ -17,8 +17,8 @@
 	(* return type, name *)
 	let rec reverse_var bt v = match v with
 		| VId(i) -> bt, i
-		| VPtr(vv) -> let ty, id = reverse_var bt vv in TPtr(ty), id
-		| VRef(vv) -> let ty, id = reverse_var bt vv in TRef(ty), id
+		| VPtr(vv) -> let ty, id = reverse_var (TPtr(bt)) vv in ty, id
+		| VRef(vv) -> let ty, id = reverse_var (TRef(bt)) vv in ty, id
 	
 	(* return type, class, name *)
 	let rec reverse_qvar bt (v, cl) =
