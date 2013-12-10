@@ -370,7 +370,7 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
   (* traduire règles restantes du for*)
   | SWhile(e,s) -> let ts,tys = type_stm ret_type env s in
 		   let te,(ty,_) = get_expr env e in
-		      ty_assert (ty = T_Int) "Condition in if statement must be integer";
+		      ty_assert (ty = T_Int) "Condition in while statement must be integer";
 		   TSWhile(te,ts),env
   (* pq while n'est pas dans les règles données ? *)
   | SDeclare(vt,i) -> let ty,b = build_type_or_ref vt in
