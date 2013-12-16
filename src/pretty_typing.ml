@@ -9,6 +9,15 @@ open Parser
 open Typing
 open Ast
 
+let repl_nl s =
+	let k = ref "" in
+	for i = 0 to String.length s - 1 do
+		if s.[i] = '\n' then
+			k := !k ^ "\\n"
+		else
+			k := !k ^ (String.make 1 s.[i])
+	done; !k
+
 let csl f l =
 	List.fold_left 
 	  (fun x t -> (if x = "" then "" else x ^ ", ") ^ (f t)) "" l
@@ -25,7 +34,7 @@ let unop_str = function
 let rec var_type_str = function
 	| T_Void -> "void" | T_Int -> "int"
 	| TPoint(k) -> "*" ^ (var_type_str k)
-	| TClass s -> ""
+	| TClass s -> s
 	| Typenull -> "NULL"
 let rec expr_string e = match e.te_desc with
 	| TEInt(i) -> string_of_int i
@@ -37,9 +46,12 @@ let rec expr_string e = match e.te_desc with
 (* ici, le second ast a changé par rapport au premier *)
 	| TEUnary(e, f) -> (unop_str e) ^ (expr_string f)
 	| TEBinary(e1, o, e2) -> "(" ^ (expr_string e1) ^ " " ^ (binop_str o) ^ " " ^ (expr_string e2) ^ ")"
-(*	| TEMember(e1, x) -> "(" ^ (expr_string e1) ^ ")." ^ x
-	| TENew(c, arg) -> "new " ^ c ^ " (" ^ (csl expr_string arg) ^ ")"*)
-	| _ -> ""
+	| TEMember(e1, i) -> "(" ^ (expr_string e1) ^ ")@" ^ (string_of_int i)
+	| TENew(c, proto, arg) -> "new " ^ c.tc_name
+			^ (match proto with | None -> "" | Some p -> " ." ^ p.tp_unique_ident)
+			 ^ " (" ^ (csl expr_string arg) ^ ")"
+	| TECallVirtual(exp, pos, args) ->
+		"(" ^ (expr_string exp) ^ ")#" ^  (string_of_int pos) ^ "(" ^ (csl expr_string args) ^ ")"
 
 let rec print_stmt l x =
 	for i = 1 to l do print_string " " done;
@@ -73,7 +85,7 @@ let rec print_stmt l x =
 					     (List.fold_left (fun x k -> x ^ " << " ^ (match k with
 					       | TSEExpr e -> expr_string e
 					       | TSEStr("\n") -> "std::endl" 
-					       | TSEStr s -> "`" ^ s ^ "`")) "" k) ^ "\n")
+					       | TSEStr s -> "\"" ^ (repl_nl s) ^ "\"")) "" k) ^ "\n")
 
 and print_block n b =
   let prefix = String.make n ' ' in
@@ -91,17 +103,20 @@ let proto_str p =
 	      )
 	      p.tp_args)
   ^ ") : " ^ (match p.tp_ret_type with | Some (ty,b) -> var_type_str ty | None -> "constructor")
+  	^ "  ." ^ p.tp_unique_ident
+  	^ (match p.tp_virtual with | None -> "" | Some k -> " #" ^ (string_of_int k))
 
-(*let print_class_decl c =
-	print_string ("class " ^ c.c_name ^ 
-		(match c.c_supers with | None -> "" | Some(s) -> " : " ^
-		(List.fold_left (fun x t -> x ^ " public " ^ t) "" s)) ^ " {\n");
-	List.iter (function
-		| CVar(t, i) -> print_string (" " ^ i ^ " : " ^ (var_type_str t) ^ "\n")
-		| CMethod(p) -> print_string (" " ^ (proto_str p) ^ "\n")
-		| CVirtualMethod(p) -> print_string (" virtual " ^ (proto_str p) ^ "\n")
-		) c.c_members;
-	print_string "}\n"*)
+let print_class_decl c =
+	print_string ("class " ^ c.tc_name ^ " (size : " ^ (string_of_int c.tc_size) ^ ")"^
+		(match c.tc_super with | None -> "" | Some(k) -> " : "^ k) ^" {\n");
+	print_string " members:\n";
+	Smap.iter (fun name (t, pos) -> print_string ("  " ^ name ^ " : " ^ (var_type_str t)
+				^ " @" ^ (string_of_int pos) ^ "\n")) c.tc_members;
+	print_string " methods:\n";
+	List.iter(fun p -> print_string ("  " ^ (proto_str p) ^ "\n")) c.tc_methods;
+	print_string " vtable:\n";
+	List.iter(fun (i, p) -> print_string ("  #" ^ (string_of_int i) ^ ": ." ^ (p.tp_unique_ident) ^ "\n")) c.tc_vtable;
+	print_string "}\n"
 
 let print_prog p =
 	List.iter (function
@@ -109,7 +124,8 @@ let print_prog p =
 					print_string ("decl " ^ i ^ " : " ^ (var_type_str ty) ^ "\n")
 		| TDFunction(p,b) -> print_string (proto_str p ^"\n");
 			print_block 0 b
-		| TDClass(c) -> () (* print_class_decl c  *)
+		| TDClass(c) -> 
+			print_class_decl c
 		) 
 	p.prog_decls
 

@@ -84,8 +84,7 @@ type proto = {
 
 type cls_mem =
 	| CVar of var_type * ident
-	| CMethod of proto
-	| CVirtualMethod of proto
+	| CMethod of proto * bool (* is method virtual *)
 
 type cls = {
 	c_name : tident;

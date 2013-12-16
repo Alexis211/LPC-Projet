@@ -146,8 +146,7 @@ let print_class_decl c =
 		(List.fold_left (fun x t -> x ^ " public " ^ t) "" s)) ^ " {\n");
 	List.iter (function
 		| CVar(t, i) -> print_string (" " ^ i ^ " : " ^ (var_type_str t) ^ "\n")
-		| CMethod(p) -> print_string (" " ^ (proto_str p) ^ "\n")
-		| CVirtualMethod(p) -> print_string (" virtual " ^ (proto_str p) ^ "\n")
+		| CMethod(p, v) -> print_string ((if v then " virtual " else " ") ^ (proto_str p) ^ "\n")
 		) c.c_members;
 	print_string "}\n"
 

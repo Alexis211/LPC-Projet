@@ -103,9 +103,9 @@ member:
 |	k = typed_vars SEMICOLON
 	{ List.map (fun (x, y) -> CVar(x, y)) k }
 |	p = cls_proto SEMICOLON
-	{ [ CMethod(p) ] }
+	{ [ CMethod(p, false) ] }
 |	VIRTUAL p = cls_proto SEMICOLON
-	{ [ CVirtualMethod(p) ] }
+	{ [ CMethod(p, true) ] }
 ;
 
 cls_proto:
