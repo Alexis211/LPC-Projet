@@ -44,7 +44,9 @@ and texpr_desc =
   | TEIdent of ident
   | TEAssign of texpression * texpression
   | TECallFun of ident * texpression list (* changé : te -> ident *)
-  | TECallMethod of texpression * ident * texpression list (* changé : te -> ident *)
+  	(* calls to non-virtual methods are compiled using TECallFun, with the object cons'ed at
+		the begining of the arguments expression list *)
+  | TECallVirtual of texpression * ident * texpression list (* TODO (c'est le bazar) *)
   | TEUnary of unop * texpression
   | TEBinary of texpression * binop * texpression
   | TEMember of texpression * ident
@@ -78,6 +80,7 @@ and tproto = {
 	tp_virtual : bool;	(* only used for class methods *)
 	tp_loc : loc;
 	tp_name : ident;	
+	tp_unique_ident : ident;	(* label de la fonction dans le code assembleur *)
 	tp_class : tident option; (* p_class = none : standalone function *)
 	tp_ret_type : type_ref option; (* p_class = some and p_ret_type = none : constructor *)
 	tp_args : (type_ref * ident) list;
@@ -89,6 +92,12 @@ and tcls = {
 	tc_members : typ Smap.t;
 	tc_methods : tproto list;
 }
+
+let tproto_numbering = ref 1
+let tproto_unique_number () =
+	let k = !tproto_numbering in
+	tproto_numbering := k + 1;
+	string_of_int k
 
 type env = {
 	e_globals : typ Smap.t;
@@ -292,10 +301,14 @@ and compute_type env e =
 			  closest_proto env.b_pe args_types candidates
 			in
 			  let l_te = List.map fst args_values in 
+			  let l_te = match obj with
+			  	| None -> l_te
+				| Some(obj_e) -> obj_e :: l_te in
 			  let ty,b = match tproto.tp_ret_type with
 				| None -> ty_error "Constructor cannot be called as function"
 				| Some (ty,b) -> ty,b in
-			  TECallFun(name,l_te),(ty,b,false)
+			  ty_assert (not tproto.tp_virtual) "Virtual methods not implemented yet.";
+			  TECallFun(tproto.tp_unique_ident,l_te),(ty,b,false)
     | EMember (e, id) ->
 		let e, (ty, r, l) = get_expr0 env e in
 		begin match ty with
@@ -392,17 +405,6 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
 			b_locals = Smap.add i (ty,b) env.b_locals;
 			b_class = env.b_class } in
 		  TSDeclareAssignExpr( (ty,b) ,i,te) , env0
-  | SWriteCout(str_e_list) -> 
-    let args = 
-      List.map
-	(fun e -> match e.se_desc with
-	  | SEExpr e0 -> let te,(ty,_) = get_expr env {e_loc = e.se_loc; e_desc = e0} in 
-			 ty_assert (ty = T_Int) "Expected integer or string in cout<<"; TSEExpr te
-	  | SEStr s -> TSEStr(s) (* osef *)  
-	)
-	str_e_list 
-    in
-    TSWriteCout(args) , env
   | SDeclareAssignConstructor(vt,i,ti,e_l) ->
 		let ty, b = build_type_or_ref vt in
 		ty_assert (bf env.b_pe ty) "Malformed type";
@@ -421,8 +423,23 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
 			let p = closest_proto env.b_pe args_types candidates in
 			(* closest_proto makes sure the prototypes match, no problem here *)
 			let l_te = List.map fst args_values in
-			TSDeclareAssignConstructor(ty, i, Some p, ti, l_te), env
+			let env0 = 
+			 {	b_pe = env.b_pe;
+				b_locals = Smap.add i (ty,b) env.b_locals;
+				b_class = env.b_class } in
+			TSDeclareAssignConstructor(ty, i, Some p, ti, l_te), env0
 		end
+  | SWriteCout(str_e_list) -> 
+    let args = 
+      List.map
+	(fun e -> match e.se_desc with
+	  | SEExpr e0 -> let te,(ty,_) = get_expr env {e_loc = e.se_loc; e_desc = e0} in 
+			 ty_assert (ty = T_Int) "Expected integer or string in cout<<"; TSEExpr te
+	  | SEStr s -> TSEStr(s) (* osef *)  
+	)
+	str_e_list 
+    in
+    TSWriteCout(args) , env
 		    
 and build_block ret_type env b = (* utilisé ds compute_type_stm et def_global_fun *)
   let two_stms (env,l) s =
@@ -468,8 +485,14 @@ let get_fun env p b = (* p : proto   b : block -> tp, tb, env2*)
 	| None -> ty_error "Internal error (function with no return type)" ) in
 
   (* Add to env *)
-  let tproto = { tp_loc = p.p_loc ; tp_name = name ; tp_class = None ; tp_virtual = false ;
-		 tp_ret_type = Some ret_type ; tp_args = ty_args; } in
+  let tproto = {
+	  	tp_loc = p.p_loc ;
+		tp_name = name ;
+		tp_unique_ident = name ^ (tproto_unique_number());
+		tp_class = None ;
+		tp_virtual = false ;
+		tp_ret_type = Some ret_type ;
+		tp_args = ty_args; } in
   let env2 = 
 		{	e_globals = env.e_globals;
 			e_funs = tproto::(env.e_funs);
@@ -531,6 +554,7 @@ and build_method env cls_name cls_mems virt proto =
 	{	tp_virtual = virt;
 		tp_loc = proto.p_loc;
 		tp_name = proto.p_name;
+		tp_unique_ident = proto.p_name ^ (tproto_unique_number()) ;
 		tp_class = Some(cls_name);
 		tp_ret_type = ret_type;
 		tp_args = args;
@@ -559,6 +583,7 @@ let get_method env proto block = 	(* return : TDFunction *)
 			{	tp_virtual = cproto.tp_virtual;
 				tp_loc = proto.p_loc;
 				tp_name = proto.p_name;
+				tp_unique_ident = proto.p_name ^ (tproto_unique_number()) ;
 				tp_class = proto.p_class;
 				tp_ret_type = ret_type;
 				tp_args = args }, tb
@@ -610,6 +635,10 @@ let prog p =
       ([],{ e_globals = Smap.empty; e_funs = []; e_classes = Smap.empty })
       p
   ) in
+  ty_assert (List.exists
+	  	(fun tp -> tp.tp_class = None && tp.tp_name = "main"
+				&& tp.tp_args = [] && tp.tp_ret_type = Some (T_Int,false))
+		env.e_funs) "No 'int main()' function defined in program...";
   { prog_decls = decls; prog_env = env }
 
 
