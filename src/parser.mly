@@ -236,6 +236,10 @@ common_statement:
 	{ SWriteCout(a) }
 ;
 
+qident:
+| c = TIDENT DOUBLECOLON i = IDENT { c, i }
+;
+
 expression:
 |	e = expression_desc
 	{ { e_loc = $startpos, $endpos; e_desc = e } }
@@ -283,6 +287,8 @@ primary_desc:
 |	a = primary LPAREN arg = separated_list(COMMA, expression) RPAREN { ECall(a, arg) }
 |	a = primary DOT b = IDENT
 	{ EMember(a, b) }
+| s = qident
+  { let c, i = s in EQIdent(c, i) }
 ;
 
 runop:

@@ -50,8 +50,8 @@ let rec expr_string e = match e.te_desc with
 	| TENew(c, proto, arg) -> "new " ^ c.tc_name
 			^ (match proto with | None -> "" | Some p -> " ." ^ p.tp_unique_ident)
 			 ^ " (" ^ (csl expr_string arg) ^ ")"
-	| TECallVirtual(exp, pos, args) ->
-		"(" ^ (expr_string exp) ^ ")#" ^  (string_of_int pos) ^ "(" ^ (csl expr_string args) ^ ")"
+	| TECallVirtual(exp, pos1, pos2, args) ->
+		"(" ^ (expr_string exp) ^ ")@" ^ (string_of_int pos1) ^ "#" ^  (string_of_int pos2) ^ "(" ^ (csl expr_string args) ^ ")"
 
 let rec print_stmt l x =
 	for i = 1 to l do print_string " " done;
@@ -104,18 +104,23 @@ let proto_str p =
 	      p.tp_args)
   ^ ") : " ^ (match p.tp_ret_type with | Some (ty,b) -> var_type_str ty | None -> "constructor")
   	^ "  ." ^ p.tp_unique_ident
-  	^ (match p.tp_virtual with | None -> "" | Some k -> " #" ^ (string_of_int k))
+  	^ (match p.tp_virtual with | None -> "" | Some (k, l) -> " @" ^ (string_of_int k) ^ "#" ^ (string_of_int l))
 
 let print_class_decl c =
-	print_string ("class " ^ c.tc_name ^ " (size : " ^ (string_of_int c.tc_size) ^ ")"^
-		(match c.tc_super with | None -> "" | Some(k) -> " : "^ k) ^" {\n");
+	print_string ("class " ^ c.tc_name ^ " (size : " ^ (string_of_int c.tc_size) ^ ") {\n");
 	print_string " members:\n";
 	Smap.iter (fun name (t, pos) -> print_string ("  " ^ name ^ " : " ^ (var_type_str t)
 				^ " @" ^ (string_of_int pos) ^ "\n")) c.tc_members;
 	print_string " methods:\n";
 	List.iter(fun p -> print_string ("  " ^ (proto_str p) ^ "\n")) c.tc_methods;
-	print_string " vtable:\n";
-	List.iter(fun (i, p) -> print_string ("  #" ^ (string_of_int i) ^ ": ." ^ (p.tp_unique_ident) ^ "\n")) c.tc_vtable;
+	print_string " hier:\n";
+  let rec print_hier s =
+    print_string ("    @" ^ (string_of_int s.h_pos) ^" : " ^ s.h_class ^ "\n");
+	  List.iter 
+      (fun (i, p) -> print_string ("      #" ^ (string_of_int i) ^ ": ." ^ (p.tp_unique_ident) ^ "\n"))
+          s.h_vtable;
+    List.iter print_hier s.h_supers
+  in print_hier c.tc_hier;
 	print_string "}\n"
 
 let print_prog p =

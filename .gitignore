@@ -7,5 +7,6 @@ _build
 *~
 *.ps
 *.pdf
+*.s
 src/parser.automaton
 src/parser.conflicts

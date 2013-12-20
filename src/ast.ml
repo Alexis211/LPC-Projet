@@ -42,6 +42,7 @@ and expr_desc =
 	| ENull
 	| EThis
 	| EIdent of ident
+  | EQIdent of tident * ident (* class * member name *)         
 	| EAssign of expression * expression
 	| ECall of expression * expression list
 	| EUnary of unop * expression

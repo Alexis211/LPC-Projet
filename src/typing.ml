@@ -12,14 +12,15 @@ let err_add_loc loc f =
     with
         | Error(k) -> raise (LocError(loc, k))
         | LocError(_, _) as e -> raise e
+        | NoCorrespondingPrototype -> raise (LocError (loc, "No corresponding prototype"))
+        | AmbiguousOverload -> raise (LocError (loc, "Ambiguous overload"))
         | Assert_failure (k, a, b) -> raise (LocError (loc,
             "(unexpected) Assertion failure: "^k^" at "^(string_of_int a)^":"^(string_of_int b)))
         | Not_found -> raise (LocError (loc, "(unexpected) Not found"))
         | Invalid_argument(k) -> raise (LocError (loc, "(unexpected) Invalid argument: "^k))
         | Match_failure(k, a, b) -> raise (LocError (loc,
             "(unexpected) Match failure: "^k^" at "^(string_of_int a)^":"^(string_of_int b)))
-        | NoCorrespondingPrototype -> raise (LocError (loc, "No corresponding prototype"))
-        | AmbiguousOverload -> raise (LocError (loc, "Ambiguous overload"))
+        | Stack_overflow -> raise (LocError (loc, "(unexpected) Stack overflow"))
         | _ -> raise (LocError (loc, "(unexpected) Other error"))
 
 (* AST typés *)
@@ -50,7 +51,7 @@ and texpr_desc =
   | TECallFun of ident * texpression list (* changé : te -> ident *)
     (* calls to non-virtual methods are compiled using TECallFun, with the object cons'ed at
         the begining of the arguments expression list *)
-  | TECallVirtual of texpression * int * texpression list (* object * index in vtable * arguments *)
+  | TECallVirtual of texpression * int * int * texpression list (* object * index in vtable * arguments *)
   | TEUnary of unop * texpression
   | TEBinary of texpression * binop * texpression
   | TEMember of texpression * int   (* object * position of member *)
@@ -81,9 +82,9 @@ and ts_desc =
 and tblock = tstatement list
 
 and tproto = {
-    tp_virtual : int option;    (* only used for class methods ; if none then not virtual,
-                                        if some then gives the index of the method in the vtable (same for all classes
-                                                of the hierarchy that have that method) *)
+    tp_virtual : (int * int) option;    (* only used for class methods ; if none then not virtual,
+                          if some then gives the index of the method in the vtable (same for all classes
+                          of the hierarchy that have that method) *)
     tp_loc : loc;
     tp_name : ident;    
     tp_unique_ident : ident;    (* label de la fonction dans le code assembleur *)
@@ -92,11 +93,19 @@ and tproto = {
     tp_args : (type_ref * ident) list;
 }
 
+and tcls_supers = tcls_hier list
+and tcls_hier = {
+    h_class : tident;
+    h_pos : int;
+    mutable h_vtable : (int * tproto) list; (* only to be muted during class definition parsing *)
+    h_supers : tcls_supers
+}
+
 and tcls = {
     tc_name : tident;
     tc_size : int;
-    tc_super : tident option;
-    tc_vtable : (int * tproto) list;
+    tc_hier : tcls_hier;
+        (* tous les supers à tous les niveaux, plus la classe actuelle *)
     tc_members : (typ * int) Smap.t;    (* type du membre * position du membre dans les données de l'objet *)
     tc_methods : tproto list;
 }
@@ -170,13 +179,11 @@ let rec subtype env a b = match a, b with
     | Typenull, TPoint(_) -> true
     | TPoint(ka), TPoint(kb) -> subtype env ka kb
     | TClass(i), TClass(j) ->
-        if i = j then true
-        else let c = get_c env i in
-            (* NOT DONE : multiple supers *)
-            begin match c.tc_super with
-            | None -> false
-            | Some(k) -> subtype env (TClass k) (TClass j)
-            end
+        let c = get_c env i in
+        let rec find_in_hier h =
+          h.h_class = j ||
+          (List.exists find_in_hier h.h_supers)
+        in find_in_hier c.tc_hier
     | _ -> false
 
 let type_size env t = match t with
@@ -200,26 +207,31 @@ let closest_proto env arg_type_list fun_list =
     | [] -> raise NoCorrespondingPrototype
     | [p] -> p
     | _ -> raise AmbiguousOverload
-let find_proto_in_class env cls name arg_type_list =
-    let rec aux = function
-    | None -> raise NoCorrespondingPrototype
-    | Some(k) -> let c = get_c env k in
-        let f = List.filter (fun p -> p.tp_name = name) c.tc_methods in
-        begin try closest_proto env arg_type_list f
-        with NoCorrespondingPrototype -> aux c.tc_super
-        end
-    in aux (Some cls)
-    
+let find_protos_in_class env cls name =
+  let rec aux s =
+    match List.filter (fun p -> p.tp_name = name) (get_c env s.h_class).tc_methods with
+    | [] ->
+      List.fold_left (fun q r ->
+            match q, (aux r) with | [], l -> l | l, [] -> l | _, _ -> raise AmbiguousOverload) [] s.h_supers
+    | k -> k
+  in aux (get_c env cls).tc_hier
+
 
 let find_cls_mem env cls_name mem_name =
-    let rec aux = function
+    let rec aux s =
+      begin try let mty, mi = Smap.find mem_name (get_c env s.h_class).tc_members in
+        Some (mty, mi + s.h_pos)
+      with Not_found -> 
+        List.fold_left (fun q r ->
+          match q, (aux r) with
+          | Some l, None -> Some l
+          | None, Some l -> Some l
+          | None, None -> None
+          | _, _ -> ty_error ("Ambiguous reference to member " ^ mem_name)) None s.h_supers
+      end
+    in match aux (get_c env cls_name).tc_hier with
+    | Some k -> k
     | None -> raise Not_found
-    | Some(k) -> let c = get_c env k in
-        begin try let mty, mi = Smap.find mem_name c.tc_members in
-            mty, mi
-        with Not_found -> aux c.tc_super
-        end
-    in aux (Some cls_name)
 
 
 (* -------------------------------------------- *)
@@ -271,6 +283,7 @@ and compute_type env e =
             TEIdent i, (t, false, true)
         with Not_found -> ty_error ("Undeclared identifier: " ^ i)
         end
+    | EQIdent(c, i) -> assert false (* TODO *)
     | EAssign (e1,e2) -> let te1,(ty1,r3,b3) = get_expr0 env e1 in
              let te2,(ty2,_,_) = get_expr0 env e2 in
              ty_assert (b3 || r3) "Can only assign to lvalue";
@@ -321,7 +334,8 @@ and compute_type env e =
                     begin match env.b_class with
                     | None -> None, closest_proto env.b_pe args_types funs
                     | Some k ->
-                        begin try Some e_this_not_ptr, find_proto_in_class env.b_pe k.tc_name i args_types
+                        begin try Some e_this_not_ptr,
+                            closest_proto env.b_pe args_types (find_protos_in_class env.b_pe k.tc_name i)
                         with NoCorrespondingPrototype ->
                             None, closest_proto env.b_pe args_types funs
                         end
@@ -330,7 +344,7 @@ and compute_type env e =
                     let e = type_expr env e in
                     begin match e.type_expr with
                     | TClass(k), a, b when a || b ->
-                        Some e, find_proto_in_class env.b_pe k i args_types
+                        Some e, closest_proto env.b_pe args_types (find_protos_in_class env.b_pe k i)
                     | _ -> ty_error "Invalid argument type for method call (not a class, or not a lvalue)"
                     end
                 | _ -> ty_error "Calling something that is neither a function nor a method") in
@@ -344,7 +358,7 @@ and compute_type env e =
           | None, Some(obj)->
                 TECallFun(tproto.tp_unique_ident,obj::l_te),(ty,b,false)
           | Some(idx), Some(obj) ->
-                TECallVirtual(obj, idx, l_te),(ty,b,false)
+                TECallVirtual(obj, fst idx, snd idx, l_te),(ty,b,false)
           | _ -> ty_error "(should not happen) Virtual function applied to no object..."
           end
     | EMember (e, id) ->
@@ -549,22 +563,34 @@ let compute_tclass env c =
     let cls_name = c.c_name in
     ty_assert (not (Smap.mem cls_name env.e_classes)) ("Redeclaration of class " ^cls_name^".");
     (* artifice pour que la classe en train d'être définie puisse être utilisée par elle-même *)
-    let forward_def = {tc_name = cls_name; tc_size = 0; tc_super = None; tc_members = Smap.empty; tc_methods = []; tc_vtable = [] } in
+    let forward_def = {
+        tc_name = cls_name;
+        tc_size = 0;
+        tc_hier = { h_class = cls_name; h_pos = 0; h_vtable = []; h_supers = [] } ;
+        tc_members = Smap.empty; tc_methods = []; } in
     let forward_env = {
         e_globals = env.e_globals;
         e_funs = env.e_funs;
         e_classes = (Smap.add cls_name forward_def env.e_classes); } in
 
-    let super, vtable, used = match c.c_supers with
-        | Some [] | None -> None, ref [], 0
-        | Some [n] -> 
-            begin try let c = get_c env n in
-                Some n, ref c.tc_vtable, c.tc_size  (* copy parent vtable, will be modified when redefined members *)
-            with Not_found -> ty_error ("Super " ^ n ^ " does not exist or is not a class.")
-            end
-        | _ -> ty_error "Intentionnal sacrifice : multiple inheritance not supported."
+    let super_list = match c.c_supers with | None -> [] | Some l -> l in
+
+    let hier, used =
+      let rec move_super diff s =
+        { h_class = s.h_class;
+          h_pos = s.h_pos + diff;
+          h_vtable = s.h_vtable;
+          h_supers = List.map (move_super diff) s.h_supers }
+      in
+      let sup, used = List.fold_left
+        (fun (sup, u) n -> let c = get_c env n in
+          (move_super u c.tc_hier)::sup, u + c.tc_size) ([], 4) super_list in
+      { h_class = cls_name;
+        h_pos = 0;
+        h_vtable = [];
+        h_supers = sup }, used
     in
-    let used = (if used = 0 then 4 else used) in    (* If no supers, reserve space for vtable pointer *)
+
     let (mem, mem_u), meth = List.fold_left
         (fun ((mem, mem_u), meth) n -> match n with
             | CVar(t, i) ->
@@ -592,26 +618,36 @@ let compute_tclass env c =
                     (*  If method is redefined from a virtual method of a parent class, it becomes virtual with same offset
                         Else if method is virtual, it gets new offset !
                         Else method is not virtual, everything is simple. *)
-                    let rec check_super = function
-                    | None -> None
-                    | Some(n) -> let c = get_c env n in
-                        try let proto = List.find
-                            (fun p -> p.tp_name = proto.p_name && p.tp_virtual <> None && (List.map fst p.tp_args) = (List.map fst args))
-                            c.tc_methods
-                        in Some (proto)
-                        with Not_found -> check_super (c.tc_super)
+
+                    let rec check_in_super (s:tcls_hier) =
+                      match List.fold_left (fun k s ->
+                          let r = check_in_super s in
+                          match k, r with
+                          | None, None -> None
+                          | None, Some k -> Some k
+                          | Some k, None -> None
+                          | Some k, Some r -> ty_error ("Ambiguous redefinition of " ^ proto.p_name))
+                        None s.h_supers
+                      with
+                      | Some k -> Some k
+                      | None ->
+                        List.fold_left (fun f (i, p) -> 
+                          if (p.tp_name = proto.p_name && (List.map fst p.tp_args) = (List.map fst args))
+                            then Some (i, s)
+                            else f) None s.h_vtable
+                    in let super = match check_in_super hier with
+                    | None -> if virt then 
+                          (*  allocate new spot in vtable of this object *)
+                          Some (List.fold_left (fun n (x, _) -> max n (x+4)) 0 hier.h_vtable, hier)
+                        else None
+                    | Some k -> Some k
                     in
-                    let vproto_in_super = check_super super in
-                    let virtl = match vproto_in_super with
-                    | Some(k) -> k.tp_virtual
-                    | None ->
-                        if not virt then None
-                        else    (* allocate new spot in vtable *)
-                            Some (List.fold_left (fun n (x, _) -> max n (x+4)) 0 !vtable)
-                    in
+
                     (* Build proto *)
                     let tproto = 
-                    {   tp_virtual = virtl;
+                    {   tp_virtual = (match super with
+                          | Some(i, c) -> Some(c.h_pos, i)
+                          | None -> None);
                         tp_loc = proto.p_loc;
                         tp_name = proto.p_name;
                         tp_unique_ident = proto.p_name ^ (tproto_unique_number()) ;
@@ -620,18 +656,17 @@ let compute_tclass env c =
                         tp_args = args;
                     } in
                     (* Add to vtable *)
-                    begin match virtl with
+                    begin match super with
                     | None -> ()
-                    | Some i ->
-                        vtable := (i, tproto)::(List.remove_assoc i !vtable)
+                    | Some (i, c) ->
+                        c.h_vtable <- (i, tproto)::(List.remove_assoc i c.h_vtable)
                     end;
                     tproto) in
                 (mem, mem_u), m::meth
         ) ((Smap.empty, used), []) c.c_members in
     {   tc_name = cls_name;
-        tc_vtable = !vtable;
         tc_size = mem_u;
-        tc_super = super;
+        tc_hier = hier;
         tc_members = mem;
         tc_methods = meth; }
 
