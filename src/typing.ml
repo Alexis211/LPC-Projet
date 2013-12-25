@@ -48,25 +48,24 @@ and texpr_desc =
   | TEThis
   | TEIdent of ident
   | TEAssign of texpression * texpression
-  | TECallFun of ident * texpression list (* changé : te -> ident *)
+  | TECallFun of ident * (texpression * bool) list * bool (* changé : te -> ident *)
     (* calls to non-virtual methods are compiled using TECallFun, with the object cons'ed at
         the begining of the arguments expression list *)
-  | TECallVirtual of texpression * int * int * texpression list (* object * index in vtable * arguments *)
+    (* for each argument, bool is is argument passed by reference ? *)
+    (* final bool : is returned value a reference ? *)
+  | TECallVirtual of texpression * int * int * (texpression * bool) list * bool
+    (* object * index in vtable * arguments * is return value a bool? *)
   | TEUnary of unop * texpression
   | TEBinary of texpression * binop * texpression
   | TEMember of texpression * int   (* object * position of member *)
-  | TENew of tcls * tproto option * texpression list
+  | TENew of tcls * ident option * (texpression * bool) list
 
 and tstr_expression =
     | TSEExpr of texpression
     | TSEStr of string
 
 
-and tstatement = {
-    ts_loc: loc;
-    ts_desc: ts_desc;
-    }
-and ts_desc =
+and tstatement =
     | TSEmpty
     | TSExpr of texpression
     | TSIf of texpression  * tstatement * tstatement
@@ -74,10 +73,10 @@ and ts_desc =
     | TSFor of texpression list * texpression option * texpression list * tstatement
     | TSBlock of tblock
     | TSReturn of texpression option
-    | TSDeclare of type_ref * ident
+    | TSDeclare of typ * ident
     | TSDeclareAssignExpr of type_ref * ident * texpression
-    | TSDeclareAssignConstructor of typ * ident * tproto option * tident * texpression list (* a faire *)
-(* Type of variable, variable name, constructor class name, constructor arguments *)
+    | TSDeclareAssignConstructor of tcls * ident * ident option * (texpression * bool) list
+(* Class name of variable, variable name, constructor class name, constructor arguments *)
     | TSWriteCout of tstr_expression list
 and tblock = tstatement list
 
@@ -136,6 +135,7 @@ type tdeclaration =
 type tprogram = {
     prog_decls : tdeclaration list;
     prog_env : env;
+    prog_main : ident;
 }
 
 (* Quelques fonctions utiles : *)
@@ -349,16 +349,17 @@ and compute_type env e =
                     end
                 | _ -> ty_error "Calling something that is neither a function nor a method") in
           let l_te = List.map fst args_values in 
+          let l_te = List.map2 (fun k ((_, r), _) -> k, r) l_te tproto.tp_args in
           let ty,b = match tproto.tp_ret_type with
             | None -> ty_error "Constructor cannot be called as function"
             | Some (ty,b) -> ty,b in
           begin match tproto.tp_virtual, obj with
           | None, None -> 
-                TECallFun(tproto.tp_unique_ident,l_te),(ty,b,false)
+                TECallFun(tproto.tp_unique_ident,l_te,b),(ty,b,false)
           | None, Some(obj)->
-                TECallFun(tproto.tp_unique_ident,obj::l_te),(ty,b,false)
+                TECallFun(tproto.tp_unique_ident,(obj, true)::l_te,b),(ty,b,false)
           | Some(idx), Some(obj) ->
-                TECallVirtual(obj, fst idx, snd idx, l_te),(ty,b,false)
+                TECallVirtual(obj, fst idx, snd idx, l_te,b),(ty,b,false)
           | _ -> ty_error "(should not happen) Virtual function applied to no object..."
           end
     | EMember (e, id) ->
@@ -384,7 +385,8 @@ and compute_type env e =
             let p = closest_proto env.b_pe args_types candidates in
             (* closest_proto makes sure the prototypes match, no problem here *)
             let l_te = List.map fst args_values in
-            TENew(c, Some p, l_te), (TPoint(TClass(cls_name)), false, false)
+            let l_te = List.map2 (fun k ((_, r), _) -> k, r) l_te p.tp_args in
+            TENew(c, Some p.tp_unique_ident, l_te), (TPoint(TClass(cls_name)), false, false)
         end
     | EThis -> 
         begin match env.b_class with
@@ -396,9 +398,7 @@ and compute_type env e =
 (* Statements *)
 
 let rec type_stm ret_type env s = 
-    err_add_loc s.s_loc (fun () ->
-        let d, ty = compute_type_stm ret_type env s in
-        { ts_loc = s.s_loc; ts_desc = d }, ty)
+    err_add_loc s.s_loc (fun () -> compute_type_stm ret_type env s)
 
 and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_desc,stm_type *)
   | SEmpty -> TSEmpty,env
@@ -438,12 +438,13 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
   (* pq while n'est pas dans les règles données ? *)
   | SDeclare(vt,i) -> let ty,b = build_type_or_ref vt in
               ty_assert (bf env.b_pe ty) "Malformed type";
+              ty_assert (not b) "Reference must be assigned at declaration";
               ty_assert (not (Smap.mem i env.b_locals) ) "Variable redefinition";
               let env0 =
               { b_pe = env.b_pe;
                 b_locals = Smap.add i (ty,b) env.b_locals;
                 b_class = env.b_class } in
-              TSDeclare( (ty,b) ,i) , env0
+              TSDeclare( ty ,i) , env0
   | SDeclareAssignExpr(vt,i,e) -> let ty,b = build_type_or_ref vt in
           ty_assert (bf env.b_pe ty) "Malformed type";
           ty_assert (not (Smap.mem i env.b_locals)) "Variable redefinition";
@@ -468,16 +469,17 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
         begin match candidates with
         | [] ->
             ty_assert (e_l = []) "Only default constructor exists and it has 0 arguments";
-            TSDeclareAssignConstructor(ty, i, None, ti, []), env
+            TSDeclareAssignConstructor(c, i, None, []), env
         | _ ->
             let p = closest_proto env.b_pe args_types candidates in
             (* closest_proto makes sure the prototypes match, no problem here *)
             let l_te = List.map fst args_values in
+            let l_te = List.map2 (fun k ((_, r), _) -> k, r) l_te p.tp_args in
             let env0 = 
              {  b_pe = env.b_pe;
                 b_locals = Smap.add i (ty,b) env.b_locals;
                 b_class = env.b_class } in
-            TSDeclareAssignConstructor(ty, i, Some p, ti, l_te), env0
+            TSDeclareAssignConstructor(c, i, Some p.tp_unique_ident, l_te), env0
         end
   | SWriteCout(str_e_list) -> 
     let args = 
@@ -739,11 +741,12 @@ let prog p =
       ([],{ e_globals = Smap.empty; e_funs = []; e_classes = Smap.empty })
       p
   ) in
-  ty_assert (List.exists
+  let p = try List.find
         (fun tp -> tp.tp_class = None && tp.tp_name = "main"
                 && tp.tp_args = [] && tp.tp_ret_type = Some (T_Int,false))
-        env.e_funs) "No 'int main()' function defined in program...";
-  { prog_decls = List.rev decls; prog_env = env }
+        env.e_funs
+    with Not_found -> ty_error "No correct main function in program." in
+  { prog_decls = List.rev decls; prog_env = env; prog_main = p.tp_unique_ident }
 
 
 

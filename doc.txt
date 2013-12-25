@@ -1,0 +1,19 @@
+Pour une fonction f(x, y) on a sur la pile :
+
+         |   .....   |
+         |     y     |   construit par
+         |     x     |   l'appelant
+  ----------------------------------
+         | sauv. $fp |   construit par
+  $fp--> | sauv. $ra |   l'appelé
+         |     z     |
+         |   .....   |
+
+La valeur renvoyée par une fonction est passée dans le registre a0.
+
+
+---
+
+Tous les calculs se font en utilisant a0 comme sommet de pile (les seuls valeurs
+plus grosses qu'un registre ne sont jamais manipulées en tant que valeurs mais toujours
+en tant qu'adresses... donc tout va bien)

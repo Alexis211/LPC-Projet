@@ -42,20 +42,20 @@ let rec expr_string e = match e.te_desc with
 	| TEThis -> "this"
 	| TEIdent(i) -> i
 	| TEAssign(k, p) -> "(" ^ (expr_string k) ^ " = " ^ (expr_string p) ^ ")"
-	| TECallFun(i, f) -> i ^ "(" ^ (csl expr_string f) ^ ")"
+	| TECallFun(i, f, _) -> i ^ "(" ^ (csl expr_string (List.map fst f)) ^ ")"
 (* ici, le second ast a changé par rapport au premier *)
 	| TEUnary(e, f) -> (unop_str e) ^ (expr_string f)
 	| TEBinary(e1, o, e2) -> "(" ^ (expr_string e1) ^ " " ^ (binop_str o) ^ " " ^ (expr_string e2) ^ ")"
 	| TEMember(e1, i) -> "(" ^ (expr_string e1) ^ ")@" ^ (string_of_int i)
 	| TENew(c, proto, arg) -> "new " ^ c.tc_name
-			^ (match proto with | None -> "" | Some p -> " ." ^ p.tp_unique_ident)
-			 ^ " (" ^ (csl expr_string arg) ^ ")"
-	| TECallVirtual(exp, pos1, pos2, args) ->
-		"(" ^ (expr_string exp) ^ ")@" ^ (string_of_int pos1) ^ "#" ^  (string_of_int pos2) ^ "(" ^ (csl expr_string args) ^ ")"
+			^ (match proto with | None -> "" | Some p -> " ." ^ p)
+			 ^ " (" ^ (csl expr_string (List.map fst arg)) ^ ")"
+	| TECallVirtual(exp, pos1, pos2, args, _) ->
+		"(" ^ (expr_string exp) ^ ")@" ^ (string_of_int pos1) ^ "#" ^  (string_of_int pos2) ^ "(" ^ (csl expr_string (List.map fst args)) ^ ")"
 
 let rec print_stmt l x =
 	for i = 1 to l do print_string " " done;
-	match x.ts_desc with 
+	match x with 
 	| TSEmpty -> print_string ";\n"
 	| TSExpr(e) -> print_string ((expr_string e) ^ "\n")
 	| TSIf(e, a, b) -> print_string ("if " ^ (expr_string e) ^ "\n");
@@ -74,13 +74,10 @@ let rec print_stmt l x =
 	| TSBlock(b) -> print_block l b
 	| TSReturn(None) -> print_string "return\n"
 	| TSReturn(Some k) -> print_string ("return " ^ (expr_string k) ^ "\n")
-	| TSDeclare((ty,b), i) -> let addr = (if b then "&" else "") in
-				  print_string (addr ^ i ^ " : " ^ (var_type_str ty) ^ "\n")
+	| TSDeclare(ty, i) ->	  print_string (i ^ " : " ^ (var_type_str ty) ^ "\n")
 	| TSDeclareAssignExpr((ty,b), i, e) -> let addr = (if b then "&" else "") in
 					  print_string (addr ^ i ^ " : " ^ (var_type_str ty) ^ " = " ^ (expr_string e) ^ "\n")
-	| TSDeclareAssignConstructor(t, i, _, c, a) -> () (*print_string
-		(i ^ " : " ^ (var_type_str t) ^ " = " ^ c ^ "(" ^
-							 (csl expr_string a) ^ ")\n")*)
+	| TSDeclareAssignConstructor(cls, i, c, a) -> print_string "XXX\n"
 	| TSWriteCout(k) -> print_string ("std::cout" ^
 					     (List.fold_left (fun x k -> x ^ " << " ^ (match k with
 					       | TSEExpr e -> expr_string e

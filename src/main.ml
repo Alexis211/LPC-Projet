@@ -78,6 +78,9 @@ let () =
       localisation2 loc;
       eprintf "%s@." msg;
       exit 2
+    | Codegen.Very_bad_error(msg) ->
+      eprintf "Very bad error: %s@." msg;
+      exit 3;
       
     | _ ->
       eprintf "Unexpected error...@.";
