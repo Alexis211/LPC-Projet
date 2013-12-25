@@ -38,14 +38,14 @@ done;
 echo "---"
 echo "Testing TYPING/"
 for a in ../tests/typing/good/*.cpp; do
-	if ./minic++ $a;
+	if ./minic++ --type-only $a;
 		then echo "OK    $a";
 		else echo "FAIL  $a";
 	fi;
 done;
 
 for a in ../tests/typing/bad/*.cpp; do
-	if ./minic++ $a 2> /dev/null;
+	if ./minic++ --type-only $a 2> /dev/null;
 		then echo "FAIL  $a";
 		else echo "OK    $a";
 	fi;
