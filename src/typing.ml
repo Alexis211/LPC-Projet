@@ -93,7 +93,7 @@ and tproto = {
 and tcls_supers = tcls_hier list
 and tcls_hier = {
     h_class : tident;
-    h_pos : int;
+    mutable h_pos : int;
     mutable h_vtable : (int * tproto) list; (* only to be muted during class definition parsing *)
     h_supers : tcls_supers
 }
@@ -713,6 +713,18 @@ let compute_tclass env c =
             tp_class = Some cls_name;
             tp_ret_type = None;
             tp_args = [] }::meth
+    in
+    (* if vtable is empty, remove it *)
+    let mem =
+      if hier.h_vtable = [] then
+        let rec mv_h h =
+          h.h_pos <- h.h_pos - 4;
+          List.iter mv_h h.h_supers
+        in
+          List.iter mv_h hier.h_supers;
+        Smap.map (fun (ty, pos) -> (ty, pos-4)) mem
+      else
+        mem
     in
     {   tc_name = cls_name;
         tc_size = mem_u;
