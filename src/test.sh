@@ -65,8 +65,8 @@ echo "Testing EXEC/"
 for a in ../tests/exec/*.cpp; do
     if ./minic++ $a;
         then 
-           spim -f ../tests/exec/`basename -s .cpp $a`.s | tail -n +6 > /tmp/spim_out.txt
-           if diff /tmp/spim_out.txt ../tests/exec/`basename -s .cpp $a`.out > /dev/null
+           mars-mips nc se1 ../tests/exec/`basename -s .cpp $a`.s  > /tmp/mips_out.txt
+           if diff -B /tmp/mips_out.txt ../tests/exec/`basename -s .cpp $a`.out > /dev/null
                then echo "OK    $a"
                else echo "FAIL  $a"
             fi

@@ -47,11 +47,12 @@ let rec expr_string e = match e.te_desc with
 	| TEUnary(e, f) -> (unop_str e) ^ (expr_string f)
 	| TEBinary(e1, o, e2) -> "(" ^ (expr_string e1) ^ " " ^ (binop_str o) ^ " " ^ (expr_string e2) ^ ")"
 	| TEMember(e1, i) -> "(" ^ (expr_string e1) ^ ")@" ^ (string_of_int i)
+	| TEPointerCast(e1, i) -> "(" ^ (expr_string e1) ^ ")+" ^ (string_of_int i)
 	| TENew(c, proto, arg) -> "new " ^ c.tc_name
-			^ (match proto with | None -> "" | Some p -> " ." ^ p)
+			^ " ." ^ proto
 			 ^ " (" ^ (csl expr_string (List.map fst arg)) ^ ")"
-	| TECallVirtual(exp, pos1, pos2, args, _) ->
-		"(" ^ (expr_string exp) ^ ")@" ^ (string_of_int pos1) ^ "#" ^  (string_of_int pos2) ^ "(" ^ (csl expr_string (List.map fst args)) ^ ")"
+	| TECallVirtual(exp, pos2, args, _) ->
+		"(" ^ (expr_string exp) ^ ")#" ^  (string_of_int pos2) ^ "(" ^ (csl expr_string (List.map fst args)) ^ ")"
 
 let rec print_stmt l x =
 	for i = 1 to l do print_string " " done;
@@ -77,7 +78,8 @@ let rec print_stmt l x =
 	| TSDeclare(ty, i) ->	  print_string (i ^ " : " ^ (var_type_str ty) ^ "\n")
 	| TSDeclareAssignExpr((ty,b), i, e) -> let addr = (if b then "&" else "") in
 					  print_string (addr ^ i ^ " : " ^ (var_type_str ty) ^ " = " ^ (expr_string e) ^ "\n")
-	| TSDeclareAssignConstructor(cls, i, c, a) -> print_string "XXX\n"
+	| TSDeclareAssignConstructor(cls, i, c, a) -> 
+    print_string (i ^ " : " ^ cls.tc_name ^ " = ." ^ c ^ " (" ^(csl expr_string (List.map fst a)) ^ ")\n")
 	| TSWriteCout(k) -> print_string ("std::cout" ^
 					     (List.fold_left (fun x k -> x ^ " << " ^ (match k with
 					       | TSEExpr e -> expr_string e
@@ -101,7 +103,7 @@ let proto_str p =
 	      p.tp_args)
   ^ ") : " ^ (match p.tp_ret_type with | Some (ty,b) -> var_type_str ty | None -> "constructor")
   	^ "  ." ^ p.tp_unique_ident
-  	^ (match p.tp_virtual with | None -> "" | Some (k, l) -> " @" ^ (string_of_int k) ^ "#" ^ (string_of_int l))
+  	^ (match p.tp_virtual with | None -> "" | Some (k, l) -> " @" ^ (string_of_int k.h_pos) ^ "#" ^ (string_of_int l))
 
 let print_class_decl c =
 	print_string ("class " ^ c.tc_name ^ " (size : " ^ (string_of_int c.tc_size) ^ ") {\n");

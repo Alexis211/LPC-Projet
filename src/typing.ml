@@ -53,12 +53,13 @@ and texpr_desc =
         the begining of the arguments expression list *)
     (* for each argument, bool is is argument passed by reference ? *)
     (* final bool : is returned value a reference ? *)
-  | TECallVirtual of texpression * int * int * (texpression * bool) list * bool
-    (* object * index in vtable * arguments * is return value a bool? *)
+  | TECallVirtual of texpression * int * (texpression * bool) list * bool
+    (* object * index in vtable * arguments * is return value a reference? *)
   | TEUnary of unop * texpression
   | TEBinary of texpression * binop * texpression
   | TEMember of texpression * int   (* object * position of member *)
-  | TENew of tcls * ident option * (texpression * bool) list
+  | TEPointerCast of texpression * int   (* object * position of member *)
+  | TENew of tcls * ident * (texpression * bool) list
 
 and tstr_expression =
     | TSEExpr of texpression
@@ -75,16 +76,13 @@ and tstatement =
     | TSReturn of texpression option
     | TSDeclare of typ * ident
     | TSDeclareAssignExpr of type_ref * ident * texpression
-    | TSDeclareAssignConstructor of tcls * ident * ident option * (texpression * bool) list
-(* Class name of variable, variable name, constructor class name, constructor arguments *)
+    | TSDeclareAssignConstructor of tcls * ident * ident * (texpression * bool) list
+(* Class name of variable, variable name, constructor name, constructor arguments *)
     | TSWriteCout of tstr_expression list
 and tblock = tstatement list
 
 and tproto = {
-    tp_virtual : (int * int) option;    (* only used for class methods ; if none then not virtual,
-                          if some then gives the index of the method in the vtable (same for all classes
-                          of the hierarchy that have that method) *)
-    tp_loc : loc;
+    tp_virtual : (tcls_hier * int) option;    (* only used for class methods ; if none then not virtual *)
     tp_name : ident;    
     tp_unique_ident : ident;    (* label de la fonction dans le code assembleur *)
     tp_class : tident option; (* p_class = none : standalone function *)
@@ -182,9 +180,44 @@ let rec subtype env a b = match a, b with
         let c = get_c env i in
         let rec find_in_hier h =
           h.h_class = j ||
-          (List.exists find_in_hier h.h_supers)
+          (List.length (List.filter find_in_hier h.h_supers) = 1)
         in find_in_hier c.tc_hier
     | _ -> false
+
+let relative_class_position env i j =
+  let c = get_c env i in
+  let rec find_in_hier h =
+    h.h_class = j ||
+    (List.length (List.filter find_in_hier h.h_supers) = 1)
+  and get_in_hier h =
+    if h.h_class = j
+      then h.h_pos
+      else match List.filter find_in_hier h.h_supers with
+        | [a] -> get_in_hier a
+        | _ -> assert false
+  in get_in_hier c.tc_hier
+
+let rec upcast env exp dt =   (* présupposé : exp.type_expr <= dt *)
+  match exp.type_expr, dt with
+  | (T_Int, _, _), T_Int -> exp
+  | (T_Void, _, _), T_Void -> exp
+  | (Typenull, _, _), TPoint(_) -> exp
+  | (TClass(i), a, b), TClass(j) when a||b ->
+    begin match relative_class_position env i j with
+    | 0 -> exp
+    | pos ->
+        { type_expr = (TClass(j), false, true); te_loc = exp.te_loc;
+          te_desc = TEMember(exp, pos) }
+    end
+  | (TPoint(TClass(i)), a, b), TPoint(TClass(j)) ->
+    begin match relative_class_position env i j with
+    | 0 -> exp
+    | pos ->
+        { type_expr = (TPoint(TClass(j)), false, true); te_loc = exp.te_loc;
+          te_desc = TEPointerCast(exp, pos) }
+    end
+  | (TPoint(ka), _, _), TPoint(kb) -> exp
+  | _ -> assert false
 
 let type_size env t = match t with
     | T_Int | Typenull | TPoint(_) -> 4
@@ -290,7 +323,7 @@ and compute_type env e =
              ty_assert (num ty1) "Cannot assign to non-numeric type (pointer type is numeric)";
              ty_assert (subtype env.b_pe ty2 ty1) "Incompatible types in assign";
                     (* type num et ref compatibles ?*)
-             (TEAssign (te1,te2) ),(ty1,false,false)
+             (TEAssign (te1,upcast env.b_pe te2 ty1) ),(ty1,false,false)
     | EUnary (op,e) -> let te,(ty,b1,b2) = get_expr0 env e in
                (match op with
              | PreIncr | PostIncr | PreDecr | PostDecr ->
@@ -315,14 +348,17 @@ and compute_type env e =
                   | Equal | NotEqual -> 
                     ty_assert ((subtype env.b_pe ty1 ty2) || (subtype env.b_pe ty2 ty1)) 
                         "Can only apply == or != to two values of compatible type";
-                    ty_assert (num ty1) "Can only apply == or != to pointers"
+                    ty_assert (num ty1) "Can only apply == or != to pointers";
+                    let te1 = if subtype env.b_pe ty1 ty2 then upcast env.b_pe te1 ty2 else te1 in
+                    let te2 = if subtype env.b_pe ty2 ty1 then upcast env.b_pe te2 ty1 else te2 in
+                    TEBinary(te1,op,te2),(T_Int,false,false)
                   | Lt | Le | Gt | Ge
                   | Add | Sub | Mul | Div | Modulo
                   | Land | Lor ->
                     ty_assert (ty1 = T_Int) "Left operand of binop is not integer";
-                    ty_assert (ty2 = T_Int) "Right operand of binop is not integer"
-                ); (* vérifs *)
-                TEBinary(te1,op,te2),(T_Int,false,false)
+                    ty_assert (ty2 = T_Int) "Right operand of binop is not integer";
+                    TEBinary(te1,op,te2),(T_Int,false,false)
+                )
     | ECall (e,e_list) ->
         (* TODO : look also within parent classes *)
             let args_values = List.map (get_expr0 env) e_list in
@@ -334,8 +370,12 @@ and compute_type env e =
                     begin match env.b_class with
                     | None -> None, closest_proto env.b_pe args_types funs
                     | Some k ->
-                        begin try Some e_this_not_ptr,
-                            closest_proto env.b_pe args_types (find_protos_in_class env.b_pe k.tc_name i)
+                        begin try 
+                            let proto = closest_proto env.b_pe args_types (find_protos_in_class env.b_pe k.tc_name i) in
+                            let upcasted = if proto.tp_virtual = None then e_this_not_ptr
+                                  else upcast env.b_pe e_this_not_ptr 
+                                  (TClass (match proto.tp_class with | None -> assert false | Some k -> k)) in
+                            Some upcasted, proto
                         with NoCorrespondingPrototype ->
                             None, closest_proto env.b_pe args_types funs
                         end
@@ -344,12 +384,16 @@ and compute_type env e =
                     let e = type_expr env e in
                     begin match e.type_expr with
                     | TClass(k), a, b when a || b ->
-                        Some e, closest_proto env.b_pe args_types (find_protos_in_class env.b_pe k i)
+                        let proto = closest_proto env.b_pe args_types (find_protos_in_class env.b_pe k i) in
+                        let upcasted = if proto.tp_virtual = None then e
+                              else upcast env.b_pe e
+                              (TClass (match proto.tp_class with | None -> assert false | Some k -> k)) in
+                        Some upcasted, proto
                     | _ -> ty_error "Invalid argument type for method call (not a class, or not a lvalue)"
                     end
                 | _ -> ty_error "Calling something that is neither a function nor a method") in
           let l_te = List.map fst args_values in 
-          let l_te = List.map2 (fun k ((_, r), _) -> k, r) l_te tproto.tp_args in
+          let l_te = List.map2 (fun k ((ty, r), _) -> upcast env.b_pe k ty, r) l_te tproto.tp_args in
           let ty,b = match tproto.tp_ret_type with
             | None -> ty_error "Constructor cannot be called as function"
             | Some (ty,b) -> ty,b in
@@ -358,8 +402,8 @@ and compute_type env e =
                 TECallFun(tproto.tp_unique_ident,l_te,b),(ty,b,false)
           | None, Some(obj)->
                 TECallFun(tproto.tp_unique_ident,(obj, true)::l_te,b),(ty,b,false)
-          | Some(idx), Some(obj) ->
-                TECallVirtual(obj, fst idx, snd idx, l_te,b),(ty,b,false)
+          | Some(hier, idx), Some(obj) ->
+                TECallVirtual(upcast env.b_pe obj (TClass hier.h_class), idx, l_te,b),(ty,b,false)
           | _ -> ty_error "(should not happen) Virtual function applied to no object..."
           end
     | EMember (e, id) ->
@@ -378,15 +422,13 @@ and compute_type env e =
           let args_types = List.map (fun (e, (t, r, l)) -> t, r||l) args_values in
         let candidates = List.filter (fun p -> p.tp_ret_type = None) c.tc_methods in
         begin match candidates with
-        | [] ->
-            ty_assert (args = []) "Only default constructor exists and it has 0 arguments";
-            TENew(c, None, []), (TPoint(TClass(cls_name)), false, false)
+        | [] -> assert false (* default constructor should always be in list *)
         | _ ->
             let p = closest_proto env.b_pe args_types candidates in
             (* closest_proto makes sure the prototypes match, no problem here *)
             let l_te = List.map fst args_values in
-            let l_te = List.map2 (fun k ((_, r), _) -> k, r) l_te p.tp_args in
-            TENew(c, Some p.tp_unique_ident, l_te), (TPoint(TClass(cls_name)), false, false)
+            let l_te = List.map2 (fun k ((ty, r), _) -> upcast env.b_pe k ty, r) l_te p.tp_args in
+            TENew(c, p.tp_unique_ident, l_te), (TPoint(TClass(cls_name)), false, false)
         end
     | EThis -> 
         begin match env.b_class with
@@ -455,7 +497,7 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
           { b_pe = env.b_pe;
             b_locals = Smap.add i (ty,b) env.b_locals;
             b_class = env.b_class } in
-          TSDeclareAssignExpr( (ty,b) ,i,te) , env0
+          TSDeclareAssignExpr( (ty,b) ,i,upcast env.b_pe te ty) , env0
   | SDeclareAssignConstructor(vt,i,ti,e_l) ->
         let ty, b = build_type_or_ref vt in
         ty_assert (bf env.b_pe ty) "Malformed type";
@@ -467,19 +509,17 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
           let args_types = List.map (fun (e, (t, r, l)) -> t, r||l) args_values in
         let candidates = List.filter (fun p -> p.tp_ret_type = None) c.tc_methods in
         begin match candidates with
-        | [] ->
-            ty_assert (e_l = []) "Only default constructor exists and it has 0 arguments";
-            TSDeclareAssignConstructor(c, i, None, []), env
+        | [] -> assert false (* ... *)
         | _ ->
             let p = closest_proto env.b_pe args_types candidates in
             (* closest_proto makes sure the prototypes match, no problem here *)
             let l_te = List.map fst args_values in
-            let l_te = List.map2 (fun k ((_, r), _) -> k, r) l_te p.tp_args in
+            let l_te = List.map2 (fun k ((ty, r), _) -> upcast env.b_pe k ty, r) l_te p.tp_args in
             let env0 = 
              {  b_pe = env.b_pe;
                 b_locals = Smap.add i (ty,b) env.b_locals;
                 b_class = env.b_class } in
-            TSDeclareAssignConstructor(c, i, Some p.tp_unique_ident, l_te), env0
+            TSDeclareAssignConstructor(c, i, p.tp_unique_ident, l_te), env0
         end
   | SWriteCout(str_e_list) -> 
     let args = 
@@ -538,7 +578,6 @@ let get_fun env p b = (* p : proto   b : block -> tp, tb, env2*)
 
   (* Add to env *)
   let tproto = {
-        tp_loc = p.p_loc ;
         tp_name = name ;
         tp_unique_ident = name ^ (tproto_unique_number());
         tp_class = None ;
@@ -635,22 +674,19 @@ let compute_tclass env c =
                       | None ->
                         List.fold_left (fun f (i, p) -> 
                           if (p.tp_name = proto.p_name && (List.map fst p.tp_args) = (List.map fst args))
-                            then Some (i, s)
+                            then Some (s, i)
                             else f) None s.h_vtable
                     in let super = match check_in_super hier with
                     | None -> if virt then 
                           (*  allocate new spot in vtable of this object *)
-                          Some (List.fold_left (fun n (x, _) -> max n (x+4)) 0 hier.h_vtable, hier)
+                          Some (hier, List.fold_left (fun n (x, _) -> max n (x+4)) 0 hier.h_vtable)
                         else None
                     | Some k -> Some k
                     in
 
                     (* Build proto *)
                     let tproto = 
-                    {   tp_virtual = (match super with
-                          | Some(i, c) -> Some(c.h_pos, i)
-                          | None -> None);
-                        tp_loc = proto.p_loc;
+                    {   tp_virtual = super;
                         tp_name = proto.p_name;
                         tp_unique_ident = proto.p_name ^ (tproto_unique_number()) ;
                         tp_class = Some(cls_name);
@@ -660,12 +696,24 @@ let compute_tclass env c =
                     (* Add to vtable *)
                     begin match super with
                     | None -> ()
-                    | Some (i, c) ->
+                    | Some (c, i) ->
                         c.h_vtable <- (i, tproto)::(List.remove_assoc i c.h_vtable)
                     end;
                     tproto) in
                 (mem, mem_u), m::meth
         ) ((Smap.empty, used), []) c.c_members in
+    (* make sure class has default constructor *)
+    let meth = 
+      if List.exists (fun p -> p.tp_ret_type = None && p.tp_name = cls_name) meth
+        then meth
+        else
+          { tp_virtual = None;
+            tp_name = cls_name;
+            tp_unique_ident = cls_name ^ "0";
+            tp_class = Some cls_name;
+            tp_ret_type = None;
+            tp_args = [] }::meth
+    in
     {   tc_name = cls_name;
         tc_size = mem_u;
         tc_hier = hier;
