@@ -57,6 +57,12 @@ val t0 : register
 val t1 : register
 val t2 : register
 val t3 : register
+val t4 : register
+val t5 : register
+val t6 : register
+val t7 : register
+val t8 : register
+val t9 : register
 val s0 : register
 val s1 : register
 val ra : register
