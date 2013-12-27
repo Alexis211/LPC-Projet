@@ -2,10 +2,10 @@ Pour une fonction f(x, y) on a sur la pile :
 
          |   .....   |
          |     y     |   construit par
-         |     x     |   l'appelant
+  $fp--> |     x     |   l'appelant
   ----------------------------------
          | sauv. $fp |   construit par
-  $fp--> | sauv. $ra |   l'appelé
+         | sauv. $ra |   l'appelé
          |     z     |
          |   .....   |
 

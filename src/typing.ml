@@ -715,16 +715,16 @@ let compute_tclass env c =
             tp_args = [] }::meth
     in
     (* if vtable is empty, remove it *)
-    let mem =
+    let mem, mem_u =
       if hier.h_vtable = [] then
         let rec mv_h h =
           h.h_pos <- h.h_pos - 4;
           List.iter mv_h h.h_supers
         in
           List.iter mv_h hier.h_supers;
-        Smap.map (fun (ty, pos) -> (ty, pos-4)) mem
+        Smap.map (fun (ty, pos) -> (ty, pos-4)) mem, mem_u - 4
       else
-        mem
+        mem, mem_u
     in
     {   tc_name = cls_name;
         tc_size = mem_u;
