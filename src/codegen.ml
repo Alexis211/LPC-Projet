@@ -155,7 +155,7 @@ let spare_reg2 = s1
   soient maintenant fait en prenant en compte la relocalisation de ces valeurs
   sur la pile. *)
 let saver env save_regs =
-  let save_code, load_code, env2 = List.fold_left
+  List.fold_left
     (fun (code, more_code, env) r ->
       let new_fp_used = env.c_fp_used + 4 in
       let pos = - new_fp_used in
@@ -174,8 +174,6 @@ let saver env save_regs =
         c_save_regs = (List.filter (fun k -> k <> r) env.c_save_regs) }
     )
     (nop, nop, env) save_regs
-  in 
-    save_code, load_code, env2
 
 (*
   renvoie le résultat dans le premier registre de free_regs
@@ -185,7 +183,7 @@ let rec gen_expr env free_regs save_regs e =
   (* register management *)
   let r = List.hd free_regs in (* register where to put result *)
   let more = List.tl free_regs in
-  (* the generator... *)
+  (* generate the code... *)
   match e.te_desc with
   | TEInt(k) -> li r k, Copy
   | TENull -> nop, Value zero
@@ -265,36 +263,33 @@ let rec gen_expr env free_regs save_regs e =
     | Ast.Plus -> t ++ cr r a, Copy
     | Ast.Minus -> t ++ cr r a ++ neg r r, Copy
     | Ast.Not -> t ++ cr r a ++ not_ r r, Copy
-    | Ast.PreIncr -> 
+    | Ast.PreIncr | Ast.PreDecr -> 
+      let delta = if x = Ast.PreIncr then 1 else -1 in
       begin match a with
-      | Addr -> t ++ lw spare_reg areg (0, r) ++ add spare_reg spare_reg oi 1 ++ sw spare_reg areg (0, r), Addr
-      | AddrByReg (k, rg) when t = nop -> t ++ lw r areg (k, rg) ++ add r r oi 1 ++ sw r areg (k, rg), Copy
-      | Value v when t = nop && v <> r -> add v v oi 1 ++ move r v, Copy
+      | Addr ->
+        t ++ move spare_reg r ++ lw r areg (0, spare_reg)
+          ++ add r r oi delta ++ sw r areg (0, spare_reg), Copy
+      | AddrByReg (k, rg) when t = nop && r <> rg ->
+        lw r areg (k, rg)
+          ++ add r r oi delta ++ sw r areg (k, rg), Copy
+      | Value v when t = nop && v <> r ->
+        add v v oi delta ++ move r v, Copy
       | _ -> assert false
       end
-    | Ast.PreDecr ->
+    | Ast.PostIncr | Ast.PostDecr -> 
+      let delta = if x = Ast.PostIncr then 1 else -1 in
       begin match a with
-      | Addr -> t ++ lw spare_reg areg (0, r) ++ sub spare_reg spare_reg oi 1 ++ sw spare_reg areg (0, r), Addr
-      | AddrByReg (k, rg) when t = nop -> lw r areg (k, rg) ++ sub r r oi 1 ++ sw r areg (k, rg), Copy
-      | Value v when t = nop && v <> r -> sub v v oi 1 ++ move r v, Copy
-      | _ -> assert false
-      end
-    | Ast.PostIncr -> 
-      begin match a with
-      | Addr -> t ++ move spare_reg r ++ lw spare_reg2 areg(0, spare_reg) ++ move r spare_reg2 ++
-          add spare_reg2 spare_reg2 oi 1 ++ sw spare_reg2 areg(0, spare_reg), Copy
-      | AddrByReg (k, rg) when t = nop ->
-          lw r areg (k, rg) ++ add spare_reg r oi 1 ++ sw spare_reg areg (k, rg), Copy
-      | Value v when t = nop && v <> r -> move r v ++ add v v oi 1, Copy
-      | _ -> assert false
-      end
-    | Ast.PostDecr ->
-      begin match a with
-      | Addr -> t ++ move spare_reg r ++ lw spare_reg2 areg(0, spare_reg) ++ move r spare_reg2 ++
-          sub spare_reg2 spare_reg2 oi 1 ++ sw spare_reg2 areg(0, spare_reg), Copy
-      | AddrByReg (k, rg) when t = nop ->
-          lw r areg (k, rg) ++ sub spare_reg r oi 1 ++ sw spare_reg areg (k, rg), Copy
-      | Value v when t = nop && v <> r -> move r v ++ sub v v oi 1, Copy
+      | Addr ->
+        t ++ move spare_reg r
+          ++ lw r areg(0, spare_reg)
+          ++ add spare_reg2 r oi delta
+          ++ sw spare_reg2 areg(0, spare_reg), Copy
+      | AddrByReg (k, rg) when t = nop && r <> rg ->
+          lw r areg (k, rg)
+            ++ add spare_reg r oi delta
+            ++ sw spare_reg areg (k, rg), Copy
+      | Value v when t = nop && v <> r ->
+        move r v ++ add v v oi delta, Copy
       | _ -> assert false
       end
     end
@@ -304,9 +299,9 @@ let rec gen_expr env free_regs save_regs e =
       let env2, tspot = env_push 4 env in
       let t1, ae1 = gen_expr env2 free_regs save_regs e1 in
       let t2, ae2 = gen_expr env free_regs save_regs e2 in
-      let t1 = t1 ++ cr r ae1 in
-      let t2 = t2 ++ cr r ae2 in
-      r, spare_reg, t2 ++ sw r areg (tspot, fp) ++ t1 ++ lw spare_reg areg (tspot, fp)
+      let t1, r1 = crb r t1 ae1 in
+      let t2, r2 = crb r t2 ae2 in
+      r1, spare_reg, t2 ++ sw r2 areg (tspot, fp) ++ t1 ++ lw spare_reg areg (tspot, fp)
     | b::_ ->
       let t1, ae1 = gen_expr env free_regs save_regs e1 in
       let t2, ae2 = gen_expr env more (r::save_regs) e2 in
@@ -334,7 +329,8 @@ let rec gen_expr env free_regs save_regs e =
     let t1 = t1 ++ cr r ae1 in
     let t2 = t2 ++ cr r ae2 in
     let lazy_lbl = id "_lazy" in
-    t1 ++ (if op = Ast.Lor then bnez r lazy_lbl else beqz r lazy_lbl) ++ t2 ++ label lazy_lbl ++ sne r r zero, Copy
+    t1 ++ (if op = Ast.Lor then bnez r lazy_lbl else beqz r lazy_lbl)
+      ++ t2 ++ label lazy_lbl ++ sne r r zero, Copy
   | TEMember(e, i) ->
     let c, a = gen_expr env free_regs save_regs e in
     if i <> 0 then begin
@@ -352,8 +348,8 @@ let rec gen_expr env free_regs save_regs e =
     let args_code, _, env_args = code_for_args env_regs_saved args [ a1; a2; a3 ] in
     code_save_regs ++ args_code
       ++ li v0 9 ++ li a0 cls.tc_size ++ syscall ++ move a0 v0
-      ++ la sp areg (-env_args.c_fp_used, fp) ++ jal constr ++ (if r <> a0 then move r a0 else nop)
-      ++ code_restore_regs, Copy
+      ++ la sp areg (-env_args.c_fp_used, fp) ++ jal constr
+      ++ (if r <> a0 then move r a0 else nop) ++ code_restore_regs, Copy
 and code_for_args env arg_list regs =
   (* assigne registers to possibly in-register arguments *)
   let args_in_regs, args_in_stack, _ = List.fold_left
@@ -392,8 +388,8 @@ and code_for_args env arg_list regs =
         c ++ cla reg addr ++ sw reg areg (pos, fp)
       else
         let tt, r2 = crb reg c addr in
-        tt ++ sw r2 areg (pos, fp) 
-      ) ++ (mk_code_callz e2 more_args) ++ lw reg areg (pos, fp)
+        tt ++ sw r2 areg (pos, fp))
+      ++ (mk_code_callz e2 more_args) ++ lw reg areg (pos, fp)
   in
   let code_reg_do_call = mk_code_callz kenv arg_reg_do_call in
   let code_reg_dont_call, _ =
@@ -416,7 +412,7 @@ let rec gen_stmt env = function
     comment "expr" ++ (fst (gen_expr_v0 env e)), nop, env
   | TSIf(cond, s1, s2) ->
     let c, a = gen_expr_v0 env cond in
-    let code, reg = crb v0 c a in
+    let c, reg = crb v0 c a in
     let l_else = id "_cond_else" in
     let l_end = id "_cond_end" in
     let c_then, d_then, _ = gen_stmt env s1 in
@@ -428,12 +424,13 @@ let rec gen_stmt env = function
       ++ label l_end, d_then ++ d_else, env
   | TSWhile(cond, body) ->
     let c, a = gen_expr_v0 env cond in
+    let c, reg = crb v0 c a in
     let l_begin = id "_while_begin" in
     let l_cond = id "_while_cond" in
     let c_body, d_body, _ = gen_stmt env body in
     comment "while" ++ b l_cond
       ++ label l_begin ++ c_body
-      ++ label l_cond ++ c ++ cr v0 a ++ bnez v0 l_begin, d_body, env
+      ++ label l_cond ++ c ++ bnez reg l_begin, d_body, env
   | TSFor(before, cond, after, body) ->
     let l_begin = id "_for_begin" in
     let l_cond = id "_for_cond" in
@@ -443,8 +440,10 @@ let rec gen_stmt env = function
       (fun code expr -> let c, _ = gen_expr_v0 env expr in code ++ c) nop after in
     let c_cond = match cond with
       | None -> b l_begin
-      | Some x -> let c, a = gen_expr_v0 env x in
-        c ++ cr v0 a ++ bnez v0 l_begin in
+      | Some x ->
+        let c, a = gen_expr_v0 env x in
+        let c, reg = crb v0 c a in
+        c ++ bnez reg l_begin in
     let c_body, d_body, _ = gen_stmt env body in
     comment "for"
       ++ c_before ++ b l_cond
@@ -457,8 +456,8 @@ let rec gen_stmt env = function
     comment "return" ++ b env.c_ret_lbl, nop, env
   | TSReturn (Some e) ->
     let c, a = gen_expr_v0 env e in
-    comment "return" ++ c
-      ++ (if env.c_ret_ref then cla v0 a else cr v0 a)
+    comment "return"
+      ++ c ++ (if env.c_ret_ref then cla v0 a else cr v0 a)
       ++ b env.c_ret_lbl, nop, env
   | TSDeclare (ty, id) ->
     let s = type_size env.c_penv ty in
@@ -503,10 +502,10 @@ let rec gen_stmt env = function
           ), nop,
       env_add_var id (if ref then VStackByRef pos else VStack pos) env2
   | TSWriteCout(sl) ->
-    let save_code, restore_code, env2 = saver env (if List.mem a0 env.c_save_regs then [a0] else []) in
+    let save_code, restore_code, env2 = saver env
+      (if List.mem a0 env.c_save_regs then [a0] else []) in
     let text1, data1 = List.fold_left
-      (fun (text, data) s ->
-        match s with
+      (fun (text, data) -> function
         | TSEExpr(e) ->
           let t, a = gen_expr env2 (a0::use_regs) (env2.c_save_regs) e in
           text ++ t ++ cr a0 a ++ li v0 1 ++ syscall, data
@@ -518,13 +517,15 @@ let rec gen_stmt env = function
               let l = id "_s" in Hashtbl.add strings s l;
               l, label l ++ asciiz s
           in
-            text ++ la a0 alab l ++ li v0 4 ++ syscall, data ++ d) (nop, nop) sl in
-    comment "cout<<..." ++ save_code ++ text1 ++ restore_code, data1, env
+            text ++ la a0 alab l ++ li v0 4 ++ syscall, data ++ d)
+      (nop, nop) sl in
+    comment "cout<<..."
+      ++ save_code ++ text1 ++ restore_code, data1, env
 and gen_block env b =
   let text, data, fin_env =
     List.fold_left (fun (t, d, e) s ->
-        let tt, dd, e = gen_stmt e s in
-          t ++ tt, d ++ dd, e)
+        let tt, dd, ee = gen_stmt e s in
+          t ++ tt, d ++ dd, ee)
       (nop, nop, env) b
   in
     text, data
@@ -535,20 +536,21 @@ let gen_decl tenv decl = match decl with
     let bytes = type_size tenv ty in
     nop, (label id) ++ (dword (let rec a n = if n > 0 then 0::(a (n-4)) else [] in a bytes))
   | TDFunction(proto, block) ->
-    let regs_for_args = match proto.tp_class with | None -> [ a0; a1; a2; a3 ] | Some k -> [ a1; a2; a3 ] in
-    let env0 = match proto.tp_class with | None -> !globals_env | Some _ -> Smap.add "this" (VRegister a0) !globals_env in
+    let regs_for_args, env0 = match proto.tp_class with
+      | None -> [ a0; a1; a2; a3 ], !globals_env
+      | Some k -> [ a1; a2; a3 ], Smap.add "this" (VRegister a0) !globals_env
+    in
     let need_fp = ref false in
     let names, _, free_regs = List.fold_left 
-            (fun (env, p, regs) ((ty, r), id) -> 
-              let s = (if r then 4 else type_size tenv ty) in
-              assert (s = 4);
-              match regs with
-              | reg::more_regs ->
-                Smap.add id (if r then VRegisterByRef reg else VRegister reg) env, p, more_regs
-              | [] -> need_fp := true;
-                Smap.add id (if r then VStackByRef p else VStack p) env, p + 4, regs
-            )
-            (env0, 0, regs_for_args) proto.tp_args in
+        (fun (env, p, regs) ((ty, r), id) -> 
+          assert (r || type_size tenv ty = 4);
+          match regs with
+          | reg::more_regs ->
+            Smap.add id (if r then VRegisterByRef reg else VRegister reg) env, p, more_regs
+          | [] -> need_fp := true;
+            Smap.add id (if r then VStackByRef p else VStack p) env, p + 4, regs
+        )
+        (env0, 0, regs_for_args) proto.tp_args in
     let env = {
       c_penv = tenv;
       c_names = names;
@@ -561,7 +563,8 @@ let gen_decl tenv decl = match decl with
     let code_for_constructor, does_calls = match proto.tp_ret_type with
       | Some _ -> nop, (List.exists stmt_does_call block)
       | None -> let cls_name = (match proto.tp_class with | Some k -> k | None -> assert false) in
-        la sp areg (-8, fp) ++ jal (cls_name ^ "0"), true in
+        la sp areg (-8, fp) ++ jal (cls_name ^ "0"), true
+    in
     let code_for_virtual = match proto.tp_virtual with
       | Some (c, _) when c.h_pos <> 0 ->
         la a0 areg (-c.h_pos, a0)
@@ -574,27 +577,30 @@ let gen_decl tenv decl = match decl with
         in
         let text, data = gen_block env2 block in 
         label proto.tp_unique_ident
-        ++ sw fp areg (-4, sp) ++ sw ra areg (-8, sp) ++ move fp sp
-        ++ code_for_virtual ++ save_code ++ code_for_constructor ++ text ++ label env.c_ret_lbl
-        ++ move sp fp ++ lw fp areg (-4, sp) ++ lw ra areg (-8, sp) ++ jr ra, data
+          ++ sw fp areg (-4, sp) ++ sw ra areg (-8, sp) ++ move fp sp
+          ++ code_for_virtual ++ save_code ++ code_for_constructor ++ text
+          ++ label env.c_ret_lbl ++ move sp fp ++ lw fp areg (-4, sp) ++ lw ra areg (-8, sp)
+          ++ jr ra, data
       else
         let text, data = gen_block env block in 
         label proto.tp_unique_ident
-        ++ (if !need_fp then sw fp areg (-4, sp) ++ move fp sp else nop)
-        ++ code_for_virtual ++ text ++ label env.c_ret_lbl
-        ++ (if !need_fp then move sp fp ++ lw fp areg (-4, sp) else nop) ++ jr ra, data
+          ++ (if !need_fp then sw fp areg (-4, sp) ++ move fp sp else nop)
+          ++ code_for_virtual ++ text
+          ++ label env.c_ret_lbl ++ (if !need_fp then move sp fp ++ lw fp areg (-4, sp) else nop)
+          ++ jr ra, data
   | TDClass(c) ->
-    let calls_something = ref false in
+    let constructor_calls_something = ref false in
     (* Call default constructor of parent classes *)
     let code_parents = List.fold_left
       (fun code parent ->
           let cn = parent.h_class in
           let c = get_c tenv cn in
-          let proto = List.find (fun p -> p.tp_ret_type = None && p.tp_args = [] && p.tp_name = cn) c.tc_methods in
-          calls_something := true;
+          let proto = List.find
+            (fun p -> p.tp_ret_type = None && p.tp_args = [] && p.tp_name = cn)
+            c.tc_methods in
+          constructor_calls_something := true;
           code ++ (if parent.h_pos <> 0 then la a0 areg(parent.h_pos, a0) else nop)
-            ++ jal proto.tp_unique_ident ++ (if parent.h_pos <> 0 then lw a0 areg (-12, fp) else nop)
-      )
+            ++ jal proto.tp_unique_ident ++ (if parent.h_pos <> 0 then lw a0 areg (-12, fp) else nop))
       nop c.tc_hier.h_supers in
     (* Build vtables and build constructor *)
     let rec make_vtables hh =
@@ -624,27 +630,30 @@ let gen_decl tenv decl = match decl with
     (* Initialize members *)
     let init_code_proper = Smap.fold
       (fun _ (ty, pos) code ->
-        (match ty with
+        code ++ (match ty with
           | TClass(s) ->
             let cs = get_c tenv s in
-            let proto = List.find (fun p -> p.tp_ret_type = None && p.tp_args = [] && p.tp_name = s) cs.tc_methods in
-            calls_something := true;
-              (if pos <> 0 then la a0 areg (pos, a0) else nop)
-                ++ la sp areg (-12, fp)
-                ++ jal proto.tp_unique_ident ++ (if pos <> 0 then lw a0 areg (-12, fp) else nop)
-          | _ -> sw zero areg (pos, a0)
-        ) ++ code) c.tc_members nop 
+            let proto = List.find
+              (fun p -> p.tp_ret_type = None && p.tp_args = [] && p.tp_name = s)
+              cs.tc_methods in
+            constructor_calls_something := true;
+            (if pos <> 0 then la a0 areg (pos, a0) else nop)
+              ++ la sp areg (-12, fp)
+              ++ jal proto.tp_unique_ident
+              ++ (if pos <> 0 then lw a0 areg (-12, fp) else nop)
+          | _ -> sw zero areg (pos, a0)))
+      c.tc_members nop 
     in (* Put it all together *)
       label (c.tc_name ^ "0")
-          ++ (if !calls_something then 
-                sw fp areg (-4, sp) ++ move fp sp ++
-                sw ra areg (-8, fp) ++ sw a0 areg (-12, fp) ++ la sp areg (-12, fp)
-              else nop)
-          ++ code_parents ++ vtable_init_code ++ init_code_proper
-          ++ (if !calls_something then
-                lw ra areg (-8, fp) ++ move sp fp ++ lw fp areg (-4, sp)
-              else nop)
-          ++ jr ra, vtables
+        ++ (if !constructor_calls_something then 
+              sw fp areg (-4, sp) ++ move fp sp ++ sw ra areg (-8, fp)
+              ++ sw a0 areg (-12, fp) ++ la sp areg (-12, fp)
+            else nop)
+        ++ code_parents ++ vtable_init_code ++ init_code_proper
+        ++ (if !constructor_calls_something then
+              lw ra areg (-8, fp) ++ move sp fp ++ lw fp areg (-4, sp)
+            else nop)
+        ++ jr ra, vtables
 
 
 let generate p =
@@ -653,10 +662,11 @@ let generate p =
         let more_text, more_data = gen_decl p.prog_env decl in
         text ++ more_text, data ++ more_data) (nop, nop) p.prog_decls in
     let text =
-      label "main" ++ jal p.prog_main ++
-      li v0 10 ++ syscall ++
-      label "_nothing" ++ jr ra ++
-      text in
+      label "main"
+        ++ jal p.prog_main
+        ++ li v0 10 ++ syscall
+        ++ label "_nothing" ++ jr ra
+        ++ text in
     { text = text;
       data = data }
   with
@@ -668,3 +678,5 @@ let generate p =
       "(unexpected) Match failure: "^k^" at "^(string_of_int a)^":"^(string_of_int b)))
   | Stack_overflow -> raise (Very_bad_error ("(unexpected) Stack overflow"))
   | _ -> raise (Very_bad_error ("(unexpected) Other error"))
+
+
