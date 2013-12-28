@@ -24,6 +24,7 @@ type cg_env = {
   c_penv : env;
   c_names : whereis_var Smap.t;
   c_ret_ref : bool;
+  c_ret_lbl : string;
   c_fp_used : int;
   c_save_regs : register list;
 }
@@ -33,6 +34,7 @@ let env_push n e =
   { c_penv = e.c_penv;
     c_names = e.c_names;
     c_ret_ref = e.c_ret_ref;
+    c_ret_lbl = e.c_ret_lbl;
     c_fp_used = kk;
     c_save_regs = e.c_save_regs }, -kk
 
@@ -110,6 +112,7 @@ let saver env save_regs =
             | VRegisterByRef k when k = r -> VStackByRef(pos)
             | a -> a) env.c_names;
         c_ret_ref = env.c_ret_ref;
+        c_ret_lbl = env.c_ret_lbl;
         c_fp_used = new_fp_used;
         c_save_regs = (List.filter (fun k -> k <> r) env.c_save_regs) }
     )
@@ -298,7 +301,7 @@ and code_for_args env arg_list regs =
           c ++ sw freg areg (-kenv.c_fp_used + u, fp) ++ code, r, sr, u+4
         )
       | reg::more_regs ->
-        let c, addr = gen_expr env (reg::use_regs) sr arg in
+        let c, addr = gen_expr kenv (reg::use_regs) sr arg in
         code ++ c ++ (if not byref then cr reg addr else cla reg addr), more_regs, reg::sr, u
     ) (nop, regs, [], 0) arg_list
   in code, sr, kenv
@@ -344,11 +347,11 @@ let rec gen_stmt env = function
     let c, d = gen_block env b in
     comment "block" ++ c, d, env
   | TSReturn (None) ->
-    comment "return" ++ b "_return", nop, env
+    comment "return" ++ b env.c_ret_lbl, nop, env
   | TSReturn (Some e) ->
     let c, a = gen_expr_v0 env e in
     assert (a = Addr || not env.c_ret_ref);
-    comment "return" ++ c ++ (if not env.c_ret_ref then cr v0 a else nop) ++ b "_return", nop, env
+    comment "return" ++ c ++ (if not env.c_ret_ref then cr v0 a else nop) ++ b env.c_ret_lbl, nop, env
   | TSDeclare (ty, id) ->
     let s = type_size env.c_penv ty in
     let env2, pos = env_push s env in
@@ -367,6 +370,7 @@ let rec gen_stmt env = function
       c_penv = env.c_penv;
       c_names = Smap.add id (VStack pos) env.c_names;
       c_ret_ref = env.c_ret_ref;
+      c_ret_lbl = env.c_ret_lbl;
       c_fp_used = env2.c_fp_used;
       c_save_regs = env.c_save_regs }
   | TSDeclareAssignConstructor(cls, id, constr, args) ->
@@ -382,6 +386,7 @@ let rec gen_stmt env = function
       c_penv = env.c_penv;
       c_names = Smap.add id (VStack pos) env.c_names;
       c_ret_ref = env.c_ret_ref;
+      c_ret_lbl = env.c_ret_lbl;
       c_save_regs = env.c_save_regs;
       c_fp_used = env2.c_fp_used; }
   | TSDeclareAssignExpr ((ty, ref), id, e) ->
@@ -393,6 +398,7 @@ let rec gen_stmt env = function
     { c_penv = env.c_penv;
       c_names = Smap.add id (if ref then VStackByRef pos else VStack pos) env.c_names;
       c_ret_ref = env.c_ret_ref;
+      c_ret_lbl = env.c_ret_lbl;
       c_fp_used = env2.c_fp_used;
       c_save_regs = env.c_save_regs }
   | TSWriteCout(sl) ->
@@ -444,6 +450,7 @@ let gen_decl tenv decl = match decl with
       c_penv = tenv;
       c_names = names;
       c_ret_ref = (match proto.tp_ret_type with | None -> false | Some(_, r) -> r);
+      c_ret_lbl = "_return_" ^ proto.tp_unique_ident;
       c_fp_used = 8;
       c_save_regs = List.filter (fun r -> not (List.mem r free_regs)) [a0; a1; a2; a3];
       } in
@@ -457,17 +464,19 @@ let gen_decl tenv decl = match decl with
         la a0 areg (-c.h_pos, a0)
       | _ -> nop
     in
-    let code1 = 
-      label proto.tp_unique_ident ++
-      sw fp areg (-4, sp) ++ sw ra areg (-8, sp) ++ move fp sp
-    in
     if does_calls 
       then
         let text, data = gen_block env2 block in 
-        code1 ++ code_for_virtual ++ save_code ++ code_for_constructor ++ text ++ b "_return", data
+        label proto.tp_unique_ident
+        ++ sw fp areg (-4, sp) ++ sw ra areg (-8, sp) ++ move fp sp
+        ++ code_for_virtual ++ save_code ++ code_for_constructor ++ text ++ label env.c_ret_lbl
+        ++ move sp fp ++ lw fp areg (-4, sp) ++ lw ra areg (-8, sp) ++ jr ra, data
       else
         let text, data = gen_block env block in 
-        code1 ++ code_for_virtual ++ text ++ b "_return", data
+        label proto.tp_unique_ident
+        ++ sw fp areg (-4, sp) ++ move fp sp
+        ++ code_for_virtual ++ text ++ label env.c_ret_lbl
+        ++ move sp fp ++ lw fp areg (-4, sp) ++ jr ra, data
   | TDClass(c) ->
     let calls_something = ref false in
     (* Call default constructor of parent classes *)
@@ -540,7 +549,6 @@ let generate p =
     let text =
       label "main" ++ jal p.prog_main ++
       li v0 10 ++ syscall ++
-      label "_return" ++ move sp fp ++ lw fp areg (-4, sp) ++ lw ra areg (-8, sp) ++
       label "_nothing" ++ jr ra ++
       text in
     { text = text;
