@@ -416,19 +416,24 @@ let rec gen_stmt env = function
     comment "expr" ++ (fst (gen_expr_v0 env e)), nop, env
   | TSIf(cond, s1, s2) ->
     let c, a = gen_expr_v0 env cond in
+    let code, reg = crb v0 c a in
     let l_else = id "_cond_else" in
     let l_end = id "_cond_end" in
     let c_then, d_then, _ = gen_stmt env s1 in
     let c_else, d_else, _ = gen_stmt env s2 in
-    comment "if" ++ c ++ cr v0 a ++ beqz v0 l_else ++ c_then ++ b l_end ++
-      label l_else ++ c_else ++ label l_end, d_then ++ d_else, env
+    comment "if"
+      ++ c ++ beqz reg l_else
+      ++ c_then ++ b l_end
+      ++ label l_else ++ c_else
+      ++ label l_end, d_then ++ d_else, env
   | TSWhile(cond, body) ->
     let c, a = gen_expr_v0 env cond in
     let l_begin = id "_while_begin" in
     let l_cond = id "_while_cond" in
     let c_body, d_body, _ = gen_stmt env body in
-    comment "while" ++ b l_cond ++ label l_begin ++ c_body ++
-      label l_cond ++ c ++ cr v0 a ++ bnez v0 l_begin, d_body, env
+    comment "while" ++ b l_cond
+      ++ label l_begin ++ c_body
+      ++ label l_cond ++ c ++ cr v0 a ++ bnez v0 l_begin, d_body, env
   | TSFor(before, cond, after, body) ->
     let l_begin = id "_for_begin" in
     let l_cond = id "_for_cond" in
@@ -441,8 +446,10 @@ let rec gen_stmt env = function
       | Some x -> let c, a = gen_expr_v0 env x in
         c ++ cr v0 a ++ bnez v0 l_begin in
     let c_body, d_body, _ = gen_stmt env body in
-    comment "for" ++ c_before ++ b l_cond ++ label l_begin ++ c_body ++ c_after ++ label l_cond
-      ++ c_cond, d_body, env
+    comment "for"
+      ++ c_before ++ b l_cond
+      ++ label l_begin ++ c_body ++ c_after
+      ++ label l_cond  ++ c_cond, d_body, env
   | TSBlock(b) ->
     let c, d = gen_block env b in
     comment "block" ++ c, d, env
@@ -459,12 +466,13 @@ let rec gen_stmt env = function
     let code = match ty with
     | TClass(i) ->
       let c = get_c env.c_penv i in
-      let cproto = List.find (fun p -> p.tp_ret_type = None && p.tp_name =  i && p.tp_args = []) c.tc_methods in
+      let cproto = List.find
+        (fun p -> p.tp_ret_type = None && p.tp_name =  i && p.tp_args = []) c.tc_methods in
       let code_save_regs, code_restore_regs, env_regs_saved = saver env2 env.c_save_regs in
-      code_save_regs ++
-      la a0 areg (pos, fp) ++
-      la sp areg (-env_regs_saved.c_fp_used, fp) ++
-      jal cproto.tp_unique_ident ++ code_restore_regs
+      code_save_regs
+        ++ la a0 areg (pos, fp)
+        ++ la sp areg (-env_regs_saved.c_fp_used, fp) ++ jal cproto.tp_unique_ident
+        ++ code_restore_regs
     | _ -> sw zero areg (pos, fp)
     in
     comment ("declare " ^ id) ++ code, nop,
@@ -474,9 +482,10 @@ let rec gen_stmt env = function
     let code =
       let code_save_regs, code_restore_regs, env_regs_saved = saver env2 env.c_save_regs in
       let args_code, _, env_args = code_for_args env_regs_saved args [ a1; a2; a3 ] in
-      code_save_regs ++ args_code ++ la a0 areg(pos, fp) 
-        ++ la sp areg (-env_args.c_fp_used, fp) ++ jal constr ++
-        code_restore_regs
+      code_save_regs
+        ++ args_code ++ la a0 areg(pos, fp) 
+        ++ la sp areg (-env_args.c_fp_used, fp) ++ jal constr
+        ++ code_restore_regs
     in
     comment ("declare " ^ id) ++ code, nop,
       env_add_var id (VStack pos) env2
@@ -484,9 +493,14 @@ let rec gen_stmt env = function
     let s = if ref then 4 else type_size env.c_penv ty in
     assert (s = 4);
     let env2, pos = env_push 4 env in
-    let code, a = gen_expr_v0 env2 e in
-    comment ("declare " ^ id) ++ code
-      ++ (if not ref then cr v0 a else cla v0 a) ++ sw v0 areg (pos, fp), nop,
+    let code, a = gen_expr_v0 env e in
+    comment ("declare " ^ id)
+      ++ (if ref then
+            code ++ cla v0 a ++ sw v0 areg (pos, fp)
+          else
+            let k, b = crb v0 code a in
+            k ++ sw b areg (pos, fp)
+          ), nop,
       env_add_var id (if ref then VStackByRef pos else VStack pos) env2
   | TSWriteCout(sl) ->
     let save_code, restore_code, env2 = saver env (if List.mem a0 env.c_save_regs then [a0] else []) in
