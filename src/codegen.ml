@@ -7,7 +7,14 @@ exception Very_bad_error of string
   - a0, a1, a2, a3 : contiennent les (éventuels) 4 premiers arguments de la fonction
   - v0 : contient la valeur de retour des fonctions (rien de particulier pour un constructeur)
   - v0-v1, t0-t9, s0-s1 : utilisés pour les calculs
-  Tous les registres doivent être sauvés par l'appellant
+  - fp contient un pointeur de frame mis à jour pour chaque appel
+      de fonction
+  - sp n'est pas tenu à jour en fonction de l'état de la pile, par contre il est
+    utilisé lors d'un appel de fonction pour pouvoir définir le nouvea fp,
+    il est donc mis à jour avant chaque appel de fonction pour effectivement refléter
+    l'état d'utilisation de la pile (pile sur laquelle il peut d'ailleurs y avoir
+    des arguments excedentaires)
+  Tous les registres doivent être sauvés par l'appellant sauf fp
   Les registres a0, a1, a2, a3 sont susceptibles d'être modifiés par la fonction appellée.
     **sauf dans le cas où a0 représente this** !!
 *)
@@ -26,28 +33,41 @@ type cg_env = {
   c_ret_ref : bool;
   c_ret_lbl : string;
   c_fp_used : int;
+  c_need_fp : bool ref;
   c_save_regs : register list;
 }
 
 let env_push n e =
+  e.c_need_fp := true;
   let kk = e.c_fp_used + n in
   { c_penv = e.c_penv;
     c_names = e.c_names;
     c_ret_ref = e.c_ret_ref;
     c_ret_lbl = e.c_ret_lbl;
+    c_need_fp = e.c_need_fp;
     c_fp_used = kk;
     c_save_regs = e.c_save_regs }, -kk
 
+let env_add_var vid vv e =
+  { c_penv = e.c_penv;
+    c_names = Smap.add vid vv e.c_names;
+    c_ret_ref = e.c_ret_ref;
+    c_ret_lbl = e.c_ret_lbl;
+    c_save_regs = e.c_save_regs;
+    c_fp_used = e.c_fp_used;
+    c_need_fp = e.c_need_fp; }
+
 let globals_env = ref Smap.empty
 
+(* Chaînes de caractères utilisées dans le programme *)
 let strings = Hashtbl.create 12 (* string -> label *)
 
-(* Identifiants uniques pour les machins - essentiellement labels *)
+(* Identifiants uniques pour divers objets - essentiellement labels *)
 let id =
   let last = ref 0 in
   fun prefix -> (last := !last + 1; prefix ^ (string_of_int !last))
 
-
+(* Doit-on se préparer à faire des appels de fonction ? Ie sauvegarder $ra *)
 let rec expr_does_call e = match e.te_desc with
   | TEInt _ | TENull | TEThis | TEIdent _ -> false
   | TEAssign(a, b) -> expr_does_call a || expr_does_call b
@@ -74,14 +94,41 @@ let rec stmt_does_call = function
   | TSWriteCout(l) -> List.exists (function | TSEExpr e -> expr_does_call e | TSEStr _ -> false) l
 
 
-(* Génération de code des machins *)
+(* La génération de code, enfin ! *)
 
+(* Arguments de la fonction gen_expr :
+  - un environnement : permet de savoir plein de choses, par exemple combien de place est
+    utilisée sur la pile en-dessous de $fp
+  - une liste de registres disponnibles pour faire le calcul
+      *qui doit toujours contenir au moins un registre*
+  - une liste de registres à sauvegarder dans tous les cas
+  - l'expression pour laquelle on veut générer du code
+
+  À l'issue d'un appel à gen_expr, il y a plusieurs possibilités, exprimées
+  par le type union expr_type décrit ci-dessus :
+  - le premier registre de la liste des registres disponnibles (noté r) contient
+    une adresse qui est l'adresse de la valeur dénotée par l'expression
+  - la valeur dénotée est stockée dans x(reg) pour un certain reg et un certain x
+  - la valeur est stockée dans un certain registre a, qui est son
+    "registre de référence", ie si on doit affecter à cette valeur on peut
+    modifier ce registre
+  - la valeur est stockée dans le registre r
+  Dans tous les cas sauf le dernier, on peut modifier la valeur dénotée par
+  l'expression (par exemple lors d'une affectation).
+  Si le typage nous garantit que l'expression ne peut pas être affectée, on peut
+  utiliser l'artifice de dire qu'une valeur est placée dans un registre comme
+  "registre de référence" même lorsque ce n'est pas le cas (= jouer avec le feu).
+*)
+
+(* possibilités pour ce qui est généré par gen_expr *)
 type expr_type =
   | Addr  (* top register contains address of value *)
   | AddrByReg of int * register (* value at int(register) *)
-  | Copy  (* top register contains copy of value *)
   | Value of register (* other register is home to the value *)
+  | Copy  (* top register contains copy of value *)
 
+(* on a fait un appel à gen_expr, maintenant on veut être sûr d'avoir
+  soit l'adresse soit la valeur dans tel ou tel registre *)
 let cla r a = match a with
   | Addr -> nop
   | AddrByReg(x, rg) -> la r areg (x, rg)
@@ -99,11 +146,20 @@ let use_regs = [ v0; v1; t0; t1; t2; t3; t4; t5; t6; t7; t8; t9 ]
 let spare_reg = s0
 let spare_reg2 = s1
 
+(* Cette fonction prévoit de l'espace sur la pile pour enregistrer les
+  valeurs de tous les registres save_regs à sauvegarder (elle donne un nouvel
+  environnement où la place nécessaire est réservée) et génère le code
+  nécessaire à la sauvegarde et à la restauration.
+  Le nouvel environnement est également modifié de manière à ce que de futurs
+  appels à des valeurs qui devaient être enregistrées dans des registres sauvegardés
+  soient maintenant fait en prenant en compte la relocalisation de ces valeurs
+  sur la pile. *)
 let saver env save_regs =
-  let sc, lc, env2 = List.fold_left
+  let save_code, load_code, env2 = List.fold_left
     (fun (code, more_code, env) r ->
       let new_fp_used = env.c_fp_used + 4 in
       let pos = - new_fp_used in
+      env.c_need_fp := true;
       code ++ sw r areg (pos, fp), lw r areg (pos, fp) ++ more_code,
       { c_penv = env.c_penv;
         c_names = Smap.map
@@ -114,15 +170,16 @@ let saver env save_regs =
         c_ret_ref = env.c_ret_ref;
         c_ret_lbl = env.c_ret_lbl;
         c_fp_used = new_fp_used;
+        c_need_fp = env.c_need_fp;
         c_save_regs = (List.filter (fun k -> k <> r) env.c_save_regs) }
     )
     (nop, nop, env) save_regs
   in 
-    sc, lc, env2
+    save_code, load_code, env2
 
-(* Convention :
-    doit garder $sp invariant ; renvoie le résultat dans le premier registre de free_regs
-    on doit toujours avoir lors d'un appel à cette fonction, $fp - env.c_fp_used = $sp
+(*
+  renvoie le résultat dans le premier registre de free_regs
+  ou autre (cf ci-dessus)
 *)
 let rec gen_expr env free_regs save_regs e =
   (* register management *)
@@ -131,11 +188,11 @@ let rec gen_expr env free_regs save_regs e =
   (* the generator... *)
   match e.te_desc with
   | TEInt(k) -> li r k, Copy
-  | TENull -> move r zero, Copy
+  | TENull -> nop, Value zero
   | TEThis -> (* convention : this is always the first argument, so in a0 *)
     begin match Smap.find "this" env.c_names with
     | VRegister(k) when k <> r -> nop, Value k
-    | VStack(i) -> lw r areg (i, fp), Copy
+    | VStack(i) -> nop, AddrByReg(i, fp)
     | _ -> assert false
     end
   | TEIdent(i) ->
@@ -144,8 +201,7 @@ let rec gen_expr env free_regs save_regs e =
     | VStack(i) -> nop, AddrByReg(i, fp)
     | VStackByRef(i) -> lw r areg (i, fp), Addr
     | VRegister(k) -> nop, Value k
-    | VRegisterByRef(k) when k <> r -> move r k, Addr
-    | _ -> assert false
+    | VRegisterByRef(k) -> nop, AddrByReg(0, k)
     end
   | TEAssign(e1, e2) ->
     begin match more with
@@ -163,11 +219,12 @@ let rec gen_expr env free_regs save_regs e =
     | b::_ ->
       let t1, ae1 = gen_expr env more (r::save_regs) e1 in
       let t2, ae2 = gen_expr env free_regs save_regs e2 in
-      let t2 = t2 ++ cr r ae2 in
+      let t2, r2 = crb r t2 ae2 in
+      let tr = if r2 = r then Copy else Value r2 in
       begin match ae1 with
-      | Addr -> t2 ++ t1 ++ sw r areg (0, b), Copy
-      | AddrByReg (x, rg) when t1 = nop -> t2 ++ sw r areg (x, rg), Copy
-      | Value k when t1 = nop && k <> r -> t2 ++ move k r, Copy
+      | Addr -> t2 ++ t1 ++ sw r2 areg (0, b), tr
+      | AddrByReg (x, rg) when t1 = nop -> t2 ++ sw r2 areg (x, rg), tr
+      | Value k when t1 = nop && k <> r2 -> t2 ++ move k r2, tr
       | _ -> assert false
       end
     end
@@ -350,8 +407,9 @@ let rec gen_stmt env = function
     comment "return" ++ b env.c_ret_lbl, nop, env
   | TSReturn (Some e) ->
     let c, a = gen_expr_v0 env e in
-    assert (a = Addr || not env.c_ret_ref);
-    comment "return" ++ c ++ (if not env.c_ret_ref then cr v0 a else nop) ++ b env.c_ret_lbl, nop, env
+    comment "return" ++ c
+      ++ (if env.c_ret_ref then cla v0 a else cr v0 a)
+      ++ b env.c_ret_lbl, nop, env
   | TSDeclare (ty, id) ->
     let s = type_size env.c_penv ty in
     let env2, pos = env_push s env in
@@ -366,13 +424,8 @@ let rec gen_stmt env = function
       jal cproto.tp_unique_ident ++ code_restore_regs
     | _ -> sw zero areg (pos, fp)
     in
-    comment ("declare " ^ id) ++ code, nop, {
-      c_penv = env.c_penv;
-      c_names = Smap.add id (VStack pos) env.c_names;
-      c_ret_ref = env.c_ret_ref;
-      c_ret_lbl = env.c_ret_lbl;
-      c_fp_used = env2.c_fp_used;
-      c_save_regs = env.c_save_regs }
+    comment ("declare " ^ id) ++ code, nop,
+      env_add_var id (VStack pos) env2
   | TSDeclareAssignConstructor(cls, id, constr, args) ->
     let env2, pos = env_push cls.tc_size env in
     let code =
@@ -382,25 +435,16 @@ let rec gen_stmt env = function
         ++ la sp areg (-env_args.c_fp_used, fp) ++ jal constr ++
         code_restore_regs
     in
-    comment ("declare " ^ id) ++ code, nop, {
-      c_penv = env.c_penv;
-      c_names = Smap.add id (VStack pos) env.c_names;
-      c_ret_ref = env.c_ret_ref;
-      c_ret_lbl = env.c_ret_lbl;
-      c_save_regs = env.c_save_regs;
-      c_fp_used = env2.c_fp_used; }
+    comment ("declare " ^ id) ++ code, nop,
+      env_add_var id (VStack pos) env2
   | TSDeclareAssignExpr ((ty, ref), id, e) ->
     let s = if ref then 4 else type_size env.c_penv ty in
     assert (s = 4);
     let env2, pos = env_push 4 env in
     let code, a = gen_expr_v0 env2 e in
-    comment ("declare " ^ id) ++ code ++ (if not ref then cr v0 a else cla v0 a) ++ sw v0 areg (pos, fp), nop,
-    { c_penv = env.c_penv;
-      c_names = Smap.add id (if ref then VStackByRef pos else VStack pos) env.c_names;
-      c_ret_ref = env.c_ret_ref;
-      c_ret_lbl = env.c_ret_lbl;
-      c_fp_used = env2.c_fp_used;
-      c_save_regs = env.c_save_regs }
+    comment ("declare " ^ id) ++ code
+      ++ (if not ref then cr v0 a else cla v0 a) ++ sw v0 areg (pos, fp), nop,
+      env_add_var id (if ref then VStackByRef pos else VStack pos) env2
   | TSWriteCout(sl) ->
     let save_code, restore_code, env2 = saver env (if List.mem a0 env.c_save_regs then [a0] else []) in
     let text1, data1 = List.fold_left
@@ -436,6 +480,7 @@ let gen_decl tenv decl = match decl with
   | TDFunction(proto, block) ->
     let regs_for_args = match proto.tp_class with | None -> [ a0; a1; a2; a3 ] | Some k -> [ a1; a2; a3 ] in
     let env0 = match proto.tp_class with | None -> !globals_env | Some _ -> Smap.add "this" (VRegister a0) !globals_env in
+    let need_fp = ref false in
     let names, _, free_regs = List.fold_left 
             (fun (env, p, regs) ((ty, r), id) -> 
               let s = (if r then 4 else type_size tenv ty) in
@@ -443,7 +488,8 @@ let gen_decl tenv decl = match decl with
               match regs with
               | reg::more_regs ->
                 Smap.add id (if r then VRegisterByRef reg else VRegister reg) env, p, more_regs
-              | _ -> Smap.add id (if r then VStackByRef p else VStack p) env, p + 4, regs
+              | [] -> need_fp := true;
+                Smap.add id (if r then VStackByRef p else VStack p) env, p + 4, regs
             )
             (env0, 0, regs_for_args) proto.tp_args in
     let env = {
@@ -452,9 +498,9 @@ let gen_decl tenv decl = match decl with
       c_ret_ref = (match proto.tp_ret_type with | None -> false | Some(_, r) -> r);
       c_ret_lbl = "_return_" ^ proto.tp_unique_ident;
       c_fp_used = 8;
+      c_need_fp = need_fp;
       c_save_regs = List.filter (fun r -> not (List.mem r free_regs)) [a0; a1; a2; a3];
       } in
-    let save_code, unsave_code, env2 = saver env (List.filter (fun x -> x <> a0 || proto.tp_class = None) env.c_save_regs) in
     let code_for_constructor, does_calls = match proto.tp_ret_type with
       | Some _ -> nop, (List.exists stmt_does_call block)
       | None -> let cls_name = (match proto.tp_class with | Some k -> k | None -> assert false) in
@@ -466,6 +512,9 @@ let gen_decl tenv decl = match decl with
     in
     if does_calls 
       then
+        let save_code, unsave_code, env2 =
+          saver env (List.filter (fun x -> x <> a0 || proto.tp_class = None) env.c_save_regs) 
+        in
         let text, data = gen_block env2 block in 
         label proto.tp_unique_ident
         ++ sw fp areg (-4, sp) ++ sw ra areg (-8, sp) ++ move fp sp
@@ -474,9 +523,9 @@ let gen_decl tenv decl = match decl with
       else
         let text, data = gen_block env block in 
         label proto.tp_unique_ident
-        ++ sw fp areg (-4, sp) ++ move fp sp
+        ++ (if !need_fp then sw fp areg (-4, sp) ++ move fp sp else nop)
         ++ code_for_virtual ++ text ++ label env.c_ret_lbl
-        ++ move sp fp ++ lw fp areg (-4, sp) ++ jr ra, data
+        ++ (if !need_fp then move sp fp ++ lw fp areg (-4, sp) else nop) ++ jr ra, data
   | TDClass(c) ->
     let calls_something = ref false in
     (* Call default constructor of parent classes *)
