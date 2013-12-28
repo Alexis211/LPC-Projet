@@ -38,7 +38,7 @@ type cg_env = {
 }
 
 let env_push n e =
-  e.c_need_fp := true;
+  if n <> 0 then e.c_need_fp := true;
   let kk = e.c_fp_used + n in
   { c_penv = e.c_penv;
     c_names = e.c_names;
@@ -137,9 +137,9 @@ let cr r a = match a with     (* conditionnally read *)
   | Addr -> lw r areg (0, r)
   | AddrByReg(x, rg) -> lw r areg (x, rg)
   | Copy -> nop
-  | Value(k) -> if r <> k then move r k else nop
+  | Value k -> if r <> k then move r k else nop
 let crb r q a = match a with
-  | Value k when q = nop -> nop, k
+  | Value k -> q, k
   | _ -> q ++ cr r a, r
 
 let use_regs = [ v0; v1; t0; t1; t2; t3; t4; t5; t6; t7; t8; t9 ]
@@ -229,25 +229,36 @@ let rec gen_expr env free_regs save_regs e =
       end
     end
   | TECallFun(id, args, b) ->
+    let keep_result_in_v0 = (not (List.mem v0 save_regs)) || r = v0 in
     let code_save_regs, code_restore_regs, env_regs_saved = saver env save_regs in
     let args_code, _, env_args = code_for_args env_regs_saved args [ a0; a1; a2; a3 ] in
-    code_save_regs ++ args_code ++ la sp areg (-env_args.c_fp_used, fp) ++ jal id
-      ++ (if r <> v0 then move r v0 else nop) ++ code_restore_regs,
-    if b then Addr else Copy
-  | TECallVirtual(obj, fi, args, b) ->
-    let code_save_regs, code_restore_regs, env_regs_saved = saver env save_regs in
-    let args_code, sr, env_args = code_for_args env_regs_saved args [ a1; a2; a3 ] in
-    let code2, a = gen_expr env_args (a0::use_regs) sr obj in
     code_save_regs
-      ++ args_code ++ code2 ++ cla a0 a ++ lw v0 areg (0, a0) ++ lw v0 areg (fi, v0)
+      ++ args_code
+      ++ la sp areg (-env_args.c_fp_used, fp) ++ jal id
+      ++ (if keep_result_in_v0 then nop else move r v0)
+      ++ code_restore_regs,
+    if b 
+      then (if keep_result_in_v0 then AddrByReg (0, v0) else Addr)
+      else (if keep_result_in_v0 then Value(v0) else Copy)
+  | TECallVirtual(obj, fi, args, b) ->
+    let keep_result_in_v0 = (not (List.mem v0 save_regs)) || r = v0 in
+    let code_save_regs, code_restore_regs, env_regs_saved = saver env save_regs in
+    let args_code, sr, env_args = code_for_args env_regs_saved ((obj, true)::args) [ a0; a1; a2; a3 ] in
+    code_save_regs
+      ++ args_code
+      ++ lw v0 areg (0, a0) ++ lw v0 areg (fi, v0)
       ++ la sp areg (-env_args.c_fp_used, fp) ++ jalr v0
-      ++ (if r <> v0 then move r v0 else nop) ++ code_restore_regs, if b then Addr else Copy
+      ++ (if keep_result_in_v0 then nop else move r v0)
+      ++ code_restore_regs, 
+    if b 
+      then (if keep_result_in_v0 then AddrByReg (0, v0) else Addr)
+      else (if keep_result_in_v0 then Value(v0) else Copy)
   | TEUnary (x, e) ->
     let t, a = gen_expr env free_regs save_regs e in
     begin match x with
     | Ast.Deref -> 
       begin match a with
-      | Value r when t = nop -> nop, AddrByReg (0, r)
+      | Value r -> t, AddrByReg (0, r)
       | _ -> t ++ cr r a, Addr
       end
     | Ast.Ref -> t ++ cla r a, Copy
@@ -257,7 +268,7 @@ let rec gen_expr env free_regs save_regs e =
     | Ast.PreIncr -> 
       begin match a with
       | Addr -> t ++ lw spare_reg areg (0, r) ++ add spare_reg spare_reg oi 1 ++ sw spare_reg areg (0, r), Addr
-      | AddrByReg (k, rg) when t = nop -> lw r areg (k, rg) ++ add r r oi 1 ++ sw r areg (k, rg), Copy
+      | AddrByReg (k, rg) when t = nop -> t ++ lw r areg (k, rg) ++ add r r oi 1 ++ sw r areg (k, rg), Copy
       | Value v when t = nop && v <> r -> add v v oi 1 ++ move r v, Copy
       | _ -> assert false
       end
@@ -344,24 +355,56 @@ let rec gen_expr env free_regs save_regs e =
       ++ la sp areg (-env_args.c_fp_used, fp) ++ jal constr ++ (if r <> a0 then move r a0 else nop)
       ++ code_restore_regs, Copy
 and code_for_args env arg_list regs =
-  let stack_use = max 0 (4 * (List.length arg_list - List.length regs)) in
+  (* assigne registers to possibly in-register arguments *)
+  let args_in_regs, args_in_stack, _ = List.fold_left
+    (fun (ir, is, fr) (arg, byref) ->
+      match fr with
+      | [] -> ir, (arg, byref)::is, []
+      | r::nfr -> (r, (arg, byref))::ir, is, nfr)
+    ([], [], regs) arg_list in
+  (* allocate stack for remaining args *)
+  let stack_use = 4 * List.length args_in_stack in
   let kenv, _ = env_push stack_use env in
-  let code, _, sr, u = List.fold_left
-    (fun (code, r, sr, u) (arg, byref) ->
-      match r with
-      | [] ->
+  (* make code for in-stack arguments *)
+  let args_in_stack = List.rev args_in_stack in
+  let code_for_stack, _ = List.fold_left
+    (fun (code, u) (arg, byref) ->
         let c, addr = gen_expr kenv use_regs [] arg in
-        if byref then (
-          c ++ cla v0 addr ++ sw v0 areg (-kenv.c_fp_used + u, fp) ++ code, r, sr, u+4
-        ) else (
+        (if byref then
+          c ++ cla v0 addr ++ sw v0 areg (-kenv.c_fp_used + u, fp) ++ code, u+4
+        else
           let c, freg = crb v0 c addr in
-          c ++ sw freg areg (-kenv.c_fp_used + u, fp) ++ code, r, sr, u+4
+          c ++ sw freg areg (-kenv.c_fp_used + u, fp) ++ code, u+4
         )
-      | reg::more_regs ->
-        let c, addr = gen_expr kenv (reg::use_regs) sr arg in
-        code ++ c ++ (if not byref then cr reg addr else cla reg addr), more_regs, reg::sr, u
-    ) (nop, regs, [], 0) arg_list
-  in code, sr, kenv
+    ) (nop, 0) args_in_stack in
+  (* make code for in-register arguments *)
+  let arg_reg_do_call, arg_reg_dont_call =
+    List.partition (fun (_, (e, _)) -> expr_does_call e) args_in_regs in
+  let rec mk_code_callz e = function
+  | [] -> nop
+  | (reg, (expr, byref))::more_args ->
+    let c, addr = gen_expr e (reg::use_regs) [] expr in
+    if more_args = [] then
+      c ++ (if byref then cla reg addr else cr reg addr)
+    else
+      let e2, pos = env_push 4 e in
+      (if byref then
+        c ++ cla reg addr ++ sw reg areg (pos, fp)
+      else
+        let tt, r2 = crb reg c addr in
+        tt ++ sw r2 areg (pos, fp) 
+      ) ++ (mk_code_callz e2 more_args) ++ lw reg areg (pos, fp)
+  in
+  let code_reg_do_call = mk_code_callz kenv arg_reg_do_call in
+  let code_reg_dont_call, _ =
+    List.fold_left
+      (fun (code, ur) (reg, (expr, byref)) ->
+        let c, addr = gen_expr kenv (reg::use_regs) ur expr in
+        code ++ c ++ (if byref then cla reg addr else cr reg addr), reg::ur)
+      (nop, []) arg_reg_dont_call
+  in
+  let code = code_for_stack ++ code_reg_do_call ++ code_reg_dont_call
+  in code, (List.map fst args_in_regs), kenv
   
 
 let gen_expr_v0 env = gen_expr env use_regs env.c_save_regs
