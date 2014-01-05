@@ -418,8 +418,12 @@ and compute_type env e =
                     | Some k ->
                         let sc = try find_cls_superclass env.b_pe k.tc_name c
                             with Not_found -> ty_error (c ^ " is no superclass of current class " ^ k.tc_name) in
-                        Some e_this_not_ptr,
-                            closest_proto env.b_pe args_types (find_protos_in_class env.b_pe sc.h_class i)
+                        let proto = closest_proto env.b_pe args_types (find_protos_in_class env.b_pe sc.h_class i) in
+                        let upcasted = if proto.tp_virtual = None
+                            then upcast env.b_pe e_this_not_ptr (TClass(c))
+                            else upcast env.b_pe e_this_not_ptr
+                                (TClass (match proto.tp_class with | None -> assert false | Some k -> k)) in
+                        Some upcasted, proto
                     | None -> ty_error "Qualified identifier in a function belonging to no class."
                     end
                 | _ -> ty_error "Calling something that is neither a function nor a method") in
