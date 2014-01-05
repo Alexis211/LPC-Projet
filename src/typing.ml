@@ -266,6 +266,21 @@ let find_cls_mem env cls_name mem_name =
     | Some k -> k
     | None -> raise Not_found
 
+let find_cls_superclass env cls_name superclass =
+    let rec aux s =
+        if s.h_class = superclass then
+            Some s
+        else
+            List.fold_left (fun q r ->
+                match q, aux r with
+                | Some l, None | None, Some l -> Some l
+                | None, None -> None
+                | _, _ -> ty_error ("Ambiguous reference to superclass " ^ superclass))
+                None s.h_supers
+    in match aux (get_c env cls_name).tc_hier with
+    | Some k -> k
+    | None -> raise Not_found
+
 
 (* -------------------------------------------- *)
 (* On passe aux choses sérieuses *)
@@ -316,7 +331,15 @@ and compute_type env e =
             TEIdent i, (t, false, true)
         with Not_found -> ty_error ("Undeclared identifier: " ^ i)
         end
-    | EQIdent(c, i) -> assert false (* TODO *)
+    | EQIdent(c, i) ->
+        begin match env.b_class with
+        | Some k ->
+            let sc = try find_cls_superclass env.b_pe k.tc_name c
+                with Not_found -> ty_error (c ^ " is no superclass of current class " ^ k.tc_name) in
+            let mty, mi = find_cls_mem env.b_pe sc.h_class i in
+                TEMember(e_this_not_ptr, mi + sc.h_pos), (mty, false, true)
+        | None -> ty_error "Qualified identifier invalid in function belonging to no class."
+        end
     | EAssign (e1,e2) -> let te1,(ty1,r3,b3) = get_expr0 env e1 in
              let te2,(ty2,_,_) = get_expr0 env e2 in
              ty_assert (b3 || r3) "Can only assign to lvalue";
@@ -360,7 +383,6 @@ and compute_type env e =
                     TEBinary(te1,op,te2),(T_Int,false,false)
                 )
     | ECall (e,e_list) ->
-        (* TODO : look also within parent classes *)
             let args_values = List.map (get_expr0 env) e_list in
             let args_types = List.map (fun (e, (t, r, l)) -> t, r||l) args_values in
 
@@ -390,6 +412,15 @@ and compute_type env e =
                               (TClass (match proto.tp_class with | None -> assert false | Some k -> k)) in
                         Some upcasted, proto
                     | _ -> ty_error "Invalid argument type for method call (not a class, or not a lvalue)"
+                    end
+                | EQIdent(c, i) ->
+                    begin match env.b_class with
+                    | Some k ->
+                        let sc = try find_cls_superclass env.b_pe k.tc_name c
+                            with Not_found -> ty_error (c ^ " is no superclass of current class " ^ k.tc_name) in
+                        Some e_this_not_ptr,
+                            closest_proto env.b_pe args_types (find_protos_in_class env.b_pe sc.h_class i)
+                    | None -> ty_error "Qualified identifier in a function belonging to no class."
                     end
                 | _ -> ty_error "Calling something that is neither a function nor a method") in
           let l_te = List.map fst args_values in 
