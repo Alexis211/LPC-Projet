@@ -90,6 +90,7 @@ let rec expr_string e = match e.e_desc with
   | ENull -> "NULL"
   | EThis -> "this"
   | EIdent(i) -> i
+  | EQIdent(i, j) -> i ^ "::" ^ j
   | EAssign(k, p) -> "(" ^ (expr_string k) ^ " = " ^ (expr_string p) ^ ")"
   | ECall(e, f) -> (expr_string e) ^ "(" ^ (csl expr_string f) ^ ")"
   | EUnary(e, f) -> (unop_str e) ^ (expr_string f)

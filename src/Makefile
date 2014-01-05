@@ -3,8 +3,8 @@ BIN=minic++
 all: $(BIN)
 
 $(BIN): main.ml ast.ml parser.mly lexer.mll pretty.ml typing.ml pretty_typing.ml
-	ocamlbuild main.byte
-	mv main.byte $(BIN)
+	ocamlbuild main.native
+	mv main.native $(BIN)
 
 clean:
 	rm -r _build
