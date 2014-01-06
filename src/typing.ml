@@ -107,12 +107,6 @@ and tcls = {
     tc_methods : tproto list;
 }
 
-let tproto_numbering = ref 1
-let tproto_unique_number () =
-    let k = !tproto_numbering in
-    tproto_numbering := k + 1;
-    string_of_int k
-
 type env = {
     e_globals : typ Smap.t;
     e_funs : tproto list;
@@ -137,6 +131,12 @@ type tprogram = {
 }
 
 (* Quelques fonctions utiles : *)
+
+let tproto_numbering = ref 1
+let tproto_unique_number () =
+    let k = !tproto_numbering in
+    tproto_numbering := k + 1;
+    string_of_int k
 
 let get_c env i =
   try Smap.find i env.e_classes with Not_found -> ty_error ("No such class: " ^ i)
@@ -349,21 +349,21 @@ and compute_type env e =
              (TEAssign (te1,upcast env.b_pe te2 ty1) ),(ty1,false,false)
     | EUnary (op,e) -> let te,(ty,b1,b2) = get_expr0 env e in
                (match op with
-             | PreIncr | PostIncr | PreDecr | PostDecr ->
-               ty_assert (b2 = true) "Can only increment/decrement lvalue";
-               ty_assert (ty = T_Int) "Can only increment/decrement integers";
-               TEUnary(op,te),(T_Int,b1,false)
-             | Plus | Minus | Not ->
-               ty_assert (ty = T_Int) "Can only apply unary plus/minus/not to integers";
-               TEUnary(op,te),(T_Int,false,false)
-             | Ref ->
-               ty_assert b2 "Can only reference lvalues";
-               TEUnary(op,te),(TPoint ty,false,false) (* verif *)
-             | Deref ->
-               let t = (match ty with
-                 | TPoint t -> t
-                 | _ -> ty_error "Can only dereference pointer"   ) in
-               TEUnary(op,te), (t,false,true)
+                 | PreIncr | PostIncr | PreDecr | PostDecr ->
+                   ty_assert (b2 = true) "Can only increment/decrement lvalue";
+                   ty_assert (ty = T_Int) "Can only increment/decrement integers";
+                   TEUnary(op,te),(T_Int,b1,false)
+                 | Plus | Minus | Not ->
+                   ty_assert (ty = T_Int) "Can only apply unary plus/minus/not to integers";
+                   TEUnary(op,te),(T_Int,false,false)
+                 | Ref ->
+                   ty_assert b2 "Can only reference lvalues";
+                   TEUnary(op,te),(TPoint ty,false,false) (* verif *)
+                 | Deref ->
+                   let t = (match ty with
+                     | TPoint t -> t
+                     | _ -> ty_error "Can only dereference pointer"   ) in
+                   TEUnary(op,te), (t,false,true)
                )
     | EBinary (e1,op,e2) -> let te1,(ty1,_,b1) = get_expr0 env e1 in
                 let te2,(ty2,_,b2) = get_expr0 env e2 in
@@ -517,10 +517,7 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
               ty_assert (bf env.b_pe ty) "Malformed type";
               ty_assert (not b) "Reference must be assigned at declaration";
               ty_assert (not (Smap.mem i env.b_locals) ) "Variable redefinition";
-              let env0 =
-              { b_pe = env.b_pe;
-                b_locals = Smap.add i (ty,b) env.b_locals;
-                b_class = env.b_class } in
+              let env0 = { env with b_locals = Smap.add i (ty,b) env.b_locals } in
               TSDeclare( ty ,i) , env0
   | SDeclareAssignExpr(vt,i,e) -> let ty,b = build_type_or_ref vt in
           ty_assert (bf env.b_pe ty) "Malformed type";
@@ -528,10 +525,7 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
           let te,(tye,r,l) = get_expr0 env e in
           ty_assert (if b  then r || l else true) "Can only assigne lvalue/reference to reference type var";
           ty_assert (subtype env.b_pe tye ty) "Invalid data type for assign.";
-          let env0 = 
-          { b_pe = env.b_pe;
-            b_locals = Smap.add i (ty,b) env.b_locals;
-            b_class = env.b_class } in
+          let env0 = { env with b_locals = Smap.add i (ty,b) env.b_locals } in
           TSDeclareAssignExpr( (ty,b) ,i,upcast env.b_pe te ty) , env0
   | SDeclareAssignConstructor(vt,i,ti,e_l) ->
         let ty, b = build_type_or_ref vt in
@@ -550,10 +544,7 @@ and compute_type_stm ret_type env s = match s.s_desc with (* statement -> ts_des
             (* closest_proto makes sure the prototypes match, no problem here *)
             let l_te = List.map fst args_values in
             let l_te = List.map2 (fun k ((ty, r), _) -> upcast env.b_pe k ty, r) l_te p.tp_args in
-            let env0 = 
-             {  b_pe = env.b_pe;
-                b_locals = Smap.add i (ty,b) env.b_locals;
-                b_class = env.b_class } in
+            let env0 = { env with b_locals = Smap.add i (ty,b) env.b_locals } in
             TSDeclareAssignConstructor(c, i, p.tp_unique_ident, l_te), env0
         end
   | SWriteCout(str_e_list) -> 
@@ -619,10 +610,7 @@ let get_fun env p b = (* p : proto   b : block -> tp, tb, env2*)
         tp_virtual = None ;
         tp_ret_type = Some ret_type ;
         tp_args = ty_args; } in
-  let env2 = 
-        {   e_globals = env.e_globals;
-            e_funs = tproto::(env.e_funs);
-            e_classes = env.e_classes; } in
+  let env2 = { env with e_funs = tproto::(env.e_funs) } in
   (* Build local env *)
   let locales = List.fold_left (* tr = (ty,ref?) *)
     (fun envir (tr,i) -> Smap.add i tr envir)
@@ -644,18 +632,14 @@ let compute_tclass env c =
         tc_size = 0;
         tc_hier = { h_class = cls_name; h_pos = 0; h_vtable = []; h_supers = [] } ;
         tc_members = Smap.empty; tc_methods = []; } in
-    let forward_env = {
-        e_globals = env.e_globals;
-        e_funs = env.e_funs;
-        e_classes = (Smap.add cls_name forward_def env.e_classes); } in
+    let forward_env = { env with e_classes = (Smap.add cls_name forward_def env.e_classes); } in
 
     let super_list = match c.c_supers with | None -> [] | Some l -> l in
 
     let hier, used =
       let rec move_super diff s =
-        { h_class = s.h_class;
+        { s with
           h_pos = s.h_pos + diff;
-          h_vtable = s.h_vtable;
           h_supers = List.map (move_super diff) s.h_supers }
       in
       let sup, used = List.fold_left
@@ -793,9 +777,7 @@ let compute_decl env d =
                 ty_assert (not (Smap.mem i env.e_globals)) ("Redeclaration of " ^ i);
                 ty_assert (not (List.exists (fun p -> p.tp_name = i) env.e_funs)) ("Redeclaration of: " ^ i ^ ", was previously a function");
                 (TDGlobal(tr,i)) , 
-                {   e_globals = (Smap.add i tr env.e_globals);
-                    e_funs = env.e_funs;
-                    e_classes = env.e_classes }
+                { env with e_globals = (Smap.add i tr env.e_globals); }
           (* on voudrait une liste de ident pr decl plsr en meme temps *)
           | DFunction (p,b) ->
             ty_assert (not (Smap.mem p.p_name env.e_globals)) ("Redeclaration of: " ^ p.p_name ^ ", was previously a global variable");
@@ -810,9 +792,7 @@ let compute_decl env d =
           | DClass c ->
             let tc = compute_tclass env c in
             (TDClass tc),
-            {   e_globals = env.e_globals;
-                e_funs = env.e_funs;
-                e_classes = Smap.add c.c_name tc env.e_classes; }
+            { env with e_classes = Smap.add c.c_name tc env.e_classes; }
           )
 
 let prog p =
