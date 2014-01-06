@@ -181,10 +181,9 @@ let rec gen_stmt env = function
       jal cproto.tp_unique_ident
     | _ -> push zero
     in
-    comment ("declare " ^ id) ++ code, nop, {
-      c_penv = env.c_penv;
+    comment ("declare " ^ id) ++ code, nop,
+    { env with
       c_names = Smap.add id (VStack pos) env.c_names;
-      c_ret_ref = env.c_ret_ref;
       c_fp_used = new_fp_used }
   | TSDeclareAssignConstructor(cls, id, constr, args) ->
     let new_fp_used = env.c_fp_used + cls.tc_size in
@@ -198,10 +197,9 @@ let rec gen_stmt env = function
       sub sp sp oi cls.tc_size ++ args_code ++ la a0 areg(pos, fp) ++ push a0 ++ jal constr ++
           popn (4 * (List.length args + 1))
     in
-    comment ("declare " ^ id) ++ code, nop, {
-      c_penv = env.c_penv;
+    comment ("declare " ^ id) ++ code, nop,
+    { env with
       c_names = Smap.add id (VStack pos) env.c_names;
-      c_ret_ref = env.c_ret_ref;
       c_fp_used = new_fp_used; }
   | TSDeclareAssignExpr ((ty, r), id, e) ->
     let s = if r then 4 else type_size env.c_penv ty in
@@ -210,10 +208,9 @@ let rec gen_stmt env = function
     let pos = - new_fp_used in
     let code, a = gen_expr env e in
     assert (a || not r);
-    comment ("declare " ^ id) ++ sub sp sp oi 4 ++ code ++ cr (a && not r) ++ sw a0 areg (pos, fp), nop, {
-      c_penv = env.c_penv;
+    comment ("declare " ^ id) ++ sub sp sp oi 4 ++ code ++ cr (a && not r) ++ sw a0 areg (pos, fp), nop,
+    { env with
       c_names = Smap.add id (if r then VStackByRef pos else VStack pos) env.c_names;
-      c_ret_ref = env.c_ret_ref;
       c_fp_used = new_fp_used }
   | TSWriteCout(sl) ->
     let text1, data1 = List.fold_left
@@ -253,10 +250,10 @@ let gen_decl tenv decl = match decl with
               Smap.add id (if r then VStackByRef p else VStack p) env, p + (type_size tenv ty)) 
             (!globals_env, (match proto.tp_class with | None -> 8 | Some k -> 12)) proto.tp_args in
     let env = {
-      c_penv = tenv;
-      c_names = names;
-      c_ret_ref = (match proto.tp_ret_type with | None -> false | Some(_, r) -> r);
-      c_fp_used = 0;
+        c_penv = tenv;
+        c_names = names;
+        c_ret_ref = (match proto.tp_ret_type with | None -> false | Some(_, r) -> r);
+        c_fp_used = 0;
       } in
     let code_for_constructor = match proto.tp_ret_type with
       | Some _ -> nop
