@@ -43,33 +43,14 @@ type cg_env = {
 let env_push n e =
   if n <> 0 then e.c_need_fp := true;
   let kk = e.c_fp_used + n in
-  { c_penv = e.c_penv;
-    c_names = e.c_names;
-    c_ret_ref = e.c_ret_ref;
-    c_ret_lbl = e.c_ret_lbl;
-    c_need_fp = e.c_need_fp;
-    c_fp_used = kk;
-    c_free_regs = e.c_free_regs;
-    c_save_regs = e.c_save_regs }, -kk
+  { e with c_fp_used = kk }, -kk
 
 let env_add_var vid vv e =
-  { c_penv = e.c_penv;
-    c_names = Smap.add vid vv e.c_names;
-    c_ret_ref = e.c_ret_ref;
-    c_ret_lbl = e.c_ret_lbl;
-    c_save_regs = e.c_save_regs;
-    c_free_regs = e.c_free_regs;
-    c_fp_used = e.c_fp_used;
-    c_need_fp = e.c_need_fp; }
+  { e with c_names = Smap.add vid vv e.c_names }
 
 let env_get_free_reg e =
   let r, more = List.hd e.c_free_regs, List.tl e.c_free_regs in
-  { c_penv = e.c_penv;
-    c_names = e.c_names;
-    c_ret_ref = e.c_ret_ref;
-    c_ret_lbl = e.c_ret_lbl;
-    c_need_fp = e.c_need_fp;
-    c_fp_used = e.c_fp_used;
+  { e with
     c_free_regs = more;
     c_save_regs = r::e.c_save_regs }, r
 
@@ -177,18 +158,14 @@ let saver env save_regs =
       let pos = - new_fp_used in
       env.c_need_fp := true;
       code ++ sw r areg (pos, fp), lw r areg (pos, fp) ++ more_code,
-      { c_penv = env.c_penv;
+      { env with
         c_names = Smap.map
           (function
             | VRegister k when k = r -> VStack (pos)
             | VRegisterByRef k when k = r -> VStackByRef(pos)
             | a -> a) env.c_names;
-        c_ret_ref = env.c_ret_ref;
-        c_ret_lbl = env.c_ret_lbl;
         c_fp_used = new_fp_used;
-        c_need_fp = env.c_need_fp;
-        c_free_regs = env.c_free_regs;
-        c_save_regs = (List.filter (fun k -> k <> r) env.c_save_regs) }
+        c_save_regs = (List.filter ((<>) r) env.c_save_regs) }
     )
     (nop, nop, env) save_regs
 
@@ -590,14 +567,14 @@ let gen_decl tenv decl = match decl with
         )
         (env0, 0, regs_for_args) proto.tp_args in
     let env = {
-      c_penv = tenv;
-      c_names = names;
-      c_ret_ref = (match proto.tp_ret_type with | None -> false | Some(_, r) -> r);
-      c_ret_lbl = "_return_" ^ proto.tp_unique_ident;
-      c_fp_used = 8;
-      c_need_fp = need_fp;
-      c_free_regs = [ t0; t1; t2; t3; t4; t5; t6; t7; t8; t9; v1 ];
-      c_save_regs = List.filter (fun r -> not (List.mem r free_regs)) [a0; a1; a2; a3];
+        c_penv = tenv;
+        c_names = names;
+        c_ret_ref = (match proto.tp_ret_type with | None -> false | Some(_, r) -> r);
+        c_ret_lbl = "_return_" ^ proto.tp_unique_ident;
+        c_fp_used = 8;
+        c_need_fp = need_fp;
+        c_free_regs = [ t0; t1; t2; t3; t4; t5; t6; t7; t8; t9; v1 ];
+        c_save_regs = List.filter (fun r -> not (List.mem r free_regs)) [a0; a1; a2; a3];
       } in
     let code_for_constructor, does_calls = match proto.tp_ret_type with
       | Some _ -> nop, (List.exists stmt_does_call block)
