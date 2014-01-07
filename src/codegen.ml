@@ -30,17 +30,18 @@ type whereis_var =
   | VRegisterByRef of register
 
 type cg_env = {
-  c_penv : env;
-  c_names : whereis_var Smap.t;
-  c_ret_ref : bool;
-  c_ret_lbl : string;
-  c_fp_used : int;
-  c_need_fp : bool ref;
-  c_save_regs : register list;
-  c_free_regs : register list;
+  c_penv : env;                     (* environnement de programme, contient des informations sur les types *)
+  c_names : whereis_var Smap.t;     (* où trouver les variables locales et globales *)
+  c_ret_ref : bool;                 (* la fonction renvoie-t-elle son résultat par référence ? *)
+  c_ret_lbl : string;               (* où jump lors d'un return (code de nettoyage, etc.) *)
+  c_fp_used : int;                  (* combien de place sur la pile est utilisé *)
+  c_need_fp : bool ref;             (* a-t-on besoin de la pile ? mis à true à la première occasion.
+                                       si false, on se dispense d'initialiser $fp *)
+  c_save_regs : register list;      (* liste de registres à préserver *)
+  c_free_regs : register list;      (* liste de registres disponnibles pour les calculs *)
 }
 
-let env_push n e =
+let env_push n e =                  (* occuper n octets de plus sur la pile, renvoyer l'environnemnet adapté *)
   if n <> 0 then e.c_need_fp := true;
   let kk = e.c_fp_used + n in
   { e with c_fp_used = kk }, -kk
@@ -48,7 +49,7 @@ let env_push n e =
 let env_add_var vid vv e =
   { e with c_names = Smap.add vid vv e.c_names }
 
-let env_get_free_reg e =
+let env_get_free_reg e =            (* prend un registre libre, le passe dans la liste des registres à conserver *)
   let r, more = List.hd e.c_free_regs, List.tl e.c_free_regs in
   { e with
     c_free_regs = more;
@@ -64,7 +65,8 @@ let id =
   let last = ref 0 in
   fun prefix -> (last := !last + 1; prefix ^ (string_of_int !last))
 
-(* Doit-on se préparer à faire des appels de fonction ? Ie sauvegarder $ra *)
+(* Doit-on se préparer à faire des appels de fonction ? Ie sauvegarder $ra,
+   et éventuellement d'autres registres *)
 let rec expr_does_call e = match e.te_desc with
   | TEInt _ | TENull | TEThis | TEIdent _ -> false
   | TEAssign(a, b) -> expr_does_call a || expr_does_call b
@@ -149,7 +151,7 @@ let spare_reg2 = s1
   nécessaire à la sauvegarde et à la restauration.
   Le nouvel environnement est également modifié de manière à ce que de futurs
   appels à des valeurs qui devaient être enregistrées dans des registres sauvegardés
-  soient maintenant fait en prenant en compte la relocalisation de ces valeurs
+  soient maintenant faits en prenant en compte la relocalisation de ces valeurs
   sur la pile. *)
 let saver env save_regs =
   List.fold_left
@@ -197,7 +199,7 @@ let rec gen_expr env free_regs save_regs e =
     end
   | TEAssign(e1, e2) ->
     begin match more with
-    | [] ->
+    | [] -> (* cas où l'on a pas assez de registres disponnibles : on doit utiliser la pile *)
       let t1, ae1 = gen_expr env free_regs save_regs e1 in
       let env2, tspot = env_push 4 env in
       let t2, ae2 = gen_expr env2 free_regs save_regs e2 in
@@ -290,7 +292,7 @@ let rec gen_expr env free_regs save_regs e =
     end
   | TEBinary(e1, op, e2) when op <> Ast.Lor && op <> Ast.Land ->
     let rs, rb, precode = match more with
-    | [] ->
+    | [] -> (* plus de registres disponnibles, utiliser la pile *)
       let env2, tspot = env_push 4 env in
       let t1, ae1 = gen_expr env2 free_regs save_regs e1 in
       let t2, ae2 = gen_expr env free_regs save_regs e2 in
@@ -345,6 +347,7 @@ let rec gen_expr env free_regs save_regs e =
       ++ li v0 9 ++ li a0 cls.tc_size ++ syscall ++ move a0 v0
       ++ la sp areg (-env_args.c_fp_used, fp) ++ jal constr
       ++ (if r <> a0 then move r a0 else nop) ++ code_restore_regs, Copy
+
 and code_for_args env arg_list regs =
   (* assigne registers to possibly in-register arguments *)
   let args_in_regs, args_in_stack, _ = List.fold_left
@@ -398,6 +401,7 @@ and code_for_args env arg_list regs =
   in code, (List.map fst args_in_regs), kenv
   
 
+(* On peut maintenant calculer une expression préferentiellement dans tel ou tel registre *)
 let gen_expr_dr dr env = gen_expr env (dr::env.c_free_regs) env.c_save_regs
 let gen_expr_v0 = gen_expr_dr v0
 
