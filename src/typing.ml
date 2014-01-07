@@ -177,6 +177,7 @@ let rec subtype env a b = match a, b with
     | T_Int, T_Int -> true
     | T_Void, T_Void -> true
     | Typenull, TPoint(_) -> true
+    | TPoint(TPoint(TClass(_))), TPoint(TPoint(_)) -> false
     | TPoint(ka), TPoint(kb) -> subtype env ka kb
     | TClass(i), TClass(j) ->
         let c = get_c env i in
