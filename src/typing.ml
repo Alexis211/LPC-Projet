@@ -395,9 +395,9 @@ and compute_type env e =
                     | Some k ->
                         begin try 
                             let proto = closest_proto env.b_pe args_types (find_protos_in_class env.b_pe k.tc_name i) in
-                            let upcasted = if proto.tp_virtual = None then e_this_not_ptr
-                                  else upcast env.b_pe e_this_not_ptr 
-                                  (TClass (match proto.tp_class with | None -> assert false | Some k -> k)) in
+                            let upcasted =
+                                  upcast env.b_pe e_this_not_ptr
+                                     (TClass (match proto.tp_class with | None -> assert false | Some k -> k)) in
                             Some upcasted, proto
                         with NoCorrespondingPrototype ->
                             None, closest_proto env.b_pe args_types funs
@@ -408,9 +408,9 @@ and compute_type env e =
                     begin match e.type_expr with
                     | TClass(k), a, b when a || b ->
                         let proto = closest_proto env.b_pe args_types (find_protos_in_class env.b_pe k i) in
-                        let upcasted = if proto.tp_virtual = None then e
-                              else upcast env.b_pe e
-                              (TClass (match proto.tp_class with | None -> assert false | Some k -> k)) in
+                        let upcasted =
+                              upcast env.b_pe e
+                                 (TClass (match proto.tp_class with | None -> assert false | Some k -> k)) in
                         Some upcasted, proto
                     | _ -> ty_error "Invalid argument type for method call (not a class, or not a lvalue)"
                     end
@@ -420,9 +420,8 @@ and compute_type env e =
                         let sc = try find_cls_superclass env.b_pe k.tc_name c
                             with Not_found -> ty_error (c ^ " is no superclass of current class " ^ k.tc_name) in
                         let proto = closest_proto env.b_pe args_types (find_protos_in_class env.b_pe sc.h_class i) in
-                        let upcasted = if proto.tp_virtual = None
-                            then upcast env.b_pe e_this_not_ptr (TClass(c))
-                            else upcast env.b_pe e_this_not_ptr
+                        let upcasted =
+                            upcast env.b_pe e_this_not_ptr
                                 (TClass (match proto.tp_class with | None -> assert false | Some k -> k)) in
                         Some upcasted, proto
                     | None -> ty_error "Qualified identifier in a function belonging to no class."
@@ -585,17 +584,18 @@ let parse_args env a =
     let rec aux = function
         | [] -> ()
         | p::q -> ty_assert (not (List.mem p q)) ("Argument name appears twice : " ^ p); aux q
-    in aux (List.map snd args);
-    args
+    in
+        aux (List.map snd args);
+        args
  
 let get_fun env p b = (* p : proto   b : block -> tp, tb, env2*)
   assert (p.p_class = None);
   let name = p.p_name in
-  let ty_args = parse_args env p.p_args in
+  let args = parse_args env p.p_args in
   (* Check there is not already a function with similar prototype *)
-  let args_type = List.map fst ty_args in
+  let args_types = List.map fst args in
   ty_assert (not (List.exists
-    (fun p -> p.tp_name = name && (List.map fst p.tp_args) = args_type) env.e_funs))
+    (fun p -> p.tp_name = name && (List.map fst p.tp_args) = args_types) env.e_funs))
     ("Redefinition of function: " ^ name);
 
   let ret_type = build_type_or_ref
@@ -610,13 +610,13 @@ let get_fun env p b = (* p : proto   b : block -> tp, tb, env2*)
         tp_class = None ;
         tp_virtual = None ;
         tp_ret_type = Some ret_type ;
-        tp_args = ty_args; } in
+        tp_args = args; } in
   let env2 = { env with e_funs = tproto::(env.e_funs) } in
   (* Build local env *)
   let locales = List.fold_left (* tr = (ty,ref?) *)
-    (fun envir (tr,i) -> Smap.add i tr envir)
+    (fun envir (tr, i) -> Smap.add i tr envir)
     Smap.empty
-    ty_args
+    args
   in (* contexte ds l'instruction *)
   let contexte = { b_pe = env2; b_locals = locales; b_class = None } in
   let tb = get_block ret_type contexte b in (* vérif instructions typées*)
@@ -668,9 +668,10 @@ let compute_tclass env c =
                     ty_assert (proto.p_ret_type <> None || proto.p_name = cls_name) "Invalid name for constructor";
                     (* Make sure prototype is well formed *)
                     let args = parse_args forward_env proto.p_args in
+                    let args_types = List.map fst args in
                     (* Make sure method is compatible with other declarations in this class *)
                     ty_assert (not (List.exists
-                            (fun p -> p.tp_name = proto.p_name && (List.map fst p.tp_args) = (List.map fst args)) meth))
+                            (fun p -> p.tp_name = proto.p_name && (List.map fst p.tp_args) = args_types) meth))
                         ("Redefinition of function " ^ proto.p_name ^ " with same argument types.");
                     (* Check return type *)
                     let ret_type = match proto.p_ret_type with
@@ -693,7 +694,7 @@ let compute_tclass env c =
                       | Some k -> Some k
                       | None ->
                         List.fold_left (fun f (i, p) -> 
-                          if (p.tp_name = proto.p_name && (List.map fst p.tp_args) = (List.map fst args))
+                          if (p.tp_name = proto.p_name && (List.map fst p.tp_args) = args_types)
                             then Some (s, i)
                             else f) None s.h_vtable
                     in let super = match check_in_super hier with
@@ -746,21 +747,24 @@ let get_method env proto block =    (* return : TDFunction *)
     | Some(cls_name) ->
     try let c = get_c env cls_name in
         let args = parse_args env proto.p_args in
+        let args_types = List.map fst args in
         let ret_type = match proto.p_ret_type with
             | Some k -> Some (build_type_or_ref k)
             | None -> None in
         (* Find prototype in class *)
         begin try let cproto = List.find 
-                (fun p -> p.tp_args = args && p.tp_ret_type = ret_type && p.tp_name = proto.p_name) c.tc_methods
+                (fun p -> (List.map fst p.tp_args) = args_types
+                    && p.tp_ret_type = ret_type
+                    && p.tp_name = proto.p_name) c.tc_methods
             in
             let locals = List.fold_left
-                (fun env (tr, i) -> Smap.add i tr env) Smap.empty args in
+                (fun env (ty, i) -> Smap.add i ty env) Smap.empty args in
             let contexte = {
                 b_pe = env;
                 b_locals = locals;
                 b_class = Some c; } in
             let tb = get_block (match ret_type with | None -> T_Void, false | Some k -> k) contexte block in
-                cproto, tb
+                { cproto with tp_args = args }, tb
         with
         | Not_found -> ty_error ("Implementation corresponds to no declared method of class " ^ cls_name)
         end
@@ -781,14 +785,14 @@ let compute_decl env d =
                 { env with e_globals = (Smap.add i tr env.e_globals); }
           (* on voudrait une liste de ident pr decl plsr en meme temps *)
           | DFunction (p,b) ->
-            ty_assert (not (Smap.mem p.p_name env.e_globals)) ("Redeclaration of: " ^ p.p_name ^ ", was previously a global variable");
             begin match p.p_class with
             | None ->
+                ty_assert (not (Smap.mem p.p_name env.e_globals)) ("Redeclaration of: " ^ p.p_name ^ ", was previously a global variable");
                 let tp, tb, env2 = get_fun env p b in
                 TDFunction(tp, tb), env2
             | Some _ ->
                 let tp, tb = get_method env p b in
-                (TDFunction(tp, tb)), env(* env is not modified *)
+                (TDFunction(tp, tb)), env (* env is not modified *)
             end
           | DClass c ->
             let tc = compute_tclass env c in
