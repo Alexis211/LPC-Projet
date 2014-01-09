@@ -677,10 +677,10 @@ let compute_tclass env c =
                     let ret_type = match proto.p_ret_type with
                         | Some k -> Some (build_type_or_ref k)
                         | None -> None in
+
                     (*  If method is redefined from a virtual method of a parent class, it becomes virtual with same offset
                         Else if method is virtual, it gets new offset !
                         Else method is not virtual, everything is simple. *)
-
                     let rec check_in_super (s:tcls_hier) =
                       match List.fold_left (fun k s ->
                           let r = check_in_super s in
@@ -694,9 +694,11 @@ let compute_tclass env c =
                       | Some k -> Some k
                       | None ->
                         List.fold_left (fun f (i, p) -> 
-                          if (p.tp_name = proto.p_name && (List.map fst p.tp_args) = args_types)
-                            then Some (s, i)
-                            else f) None s.h_vtable
+                          if (p.tp_name = proto.p_name && (List.map fst p.tp_args) = args_types && p.tp_virtual <> None)
+                            then begin
+                                ty_assert (p.tp_ret_type = ret_type) "Virtual method must be redefined with same return type.";
+                                Some (s, i)
+                            end else f) None s.h_vtable
                     in let super = match check_in_super hier with
                     | None -> if virt then 
                           (*  allocate new spot in vtable of this object *)
