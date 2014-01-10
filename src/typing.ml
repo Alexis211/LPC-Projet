@@ -678,51 +678,53 @@ let compute_tclass env c =
                         | Some k -> Some (build_type_or_ref k)
                         | None -> None in
 
-                    (*  If method is redefined from a virtual method of a parent class, it becomes virtual with same offset
-                        Else if method is virtual, it gets new offset !
-                        Else method is not virtual, everything is simple. *)
-                    let rec check_in_super (s:tcls_hier) =
-                      match List.fold_left (fun k s ->
-                          let r = check_in_super s in
-                          match k, r with
-                          | None, None -> None
-                          | None, Some k -> Some k
-                          | Some k, None -> None
-                          | Some k, Some r -> ty_error ("Ambiguous redefinition of " ^ proto.p_name))
-                        None s.h_supers
-                      with
-                      | Some k -> Some k
-                      | None ->
-                        List.fold_left (fun f (i, p) -> 
-                          if (p.tp_name = proto.p_name && (List.map fst p.tp_args) = args_types && p.tp_virtual <> None)
-                            then begin
-                                ty_assert (p.tp_ret_type = ret_type) "Virtual method must be redefined with same return type.";
-                                Some (s, i)
-                            end else f) None s.h_vtable
-                    in let super = match check_in_super hier with
-                    | None -> if virt then 
-                          (*  allocate new spot in vtable of this object *)
-                          Some (hier, List.fold_left (fun n (x, _) -> max n (x+4)) 0 hier.h_vtable)
-                        else None
-                    | Some k -> Some k
-                    in
-
-                    (* Build proto *)
+                    (* Build primitive proto *)
                     let tproto = 
-                    {   tp_virtual = super;
+                    {   tp_virtual = None;
                         tp_name = proto.p_name;
                         tp_unique_ident = proto.p_name ^ (tproto_unique_number()) ;
                         tp_class = Some(cls_name);
                         tp_ret_type = ret_type;
                         tp_args = args;
                     } in
-                    (* Add to vtable *)
-                    begin match super with
-                    | None -> ()
-                    | Some (c, i) ->
-                        c.h_vtable <- (i, tproto)::(List.remove_assoc i c.h_vtable)
-                    end;
-                    tproto) in
+
+                    (*  If method is redefined from a virtual method of a parent class,
+                            it becomes virtual with same offset
+                        If method is redefined from a virtual method of several parent classes,
+                            update vtables for all these parent classes, use any as virtual
+                            class for this class.
+                        Else if method is virtual, it gets new offset !
+                        Else method is not virtual, everything is simple. *)
+                    let rec check_in_super (s:tcls_hier) =
+                      let c_proto =
+                        try
+                          let (pos, proto) = List.find
+                            (fun (_, p) -> p.tp_name = proto.p_name && (List.map fst p.tp_args) = args_types && p.tp_virtual <> None)
+                            s.h_vtable in
+                          ty_assert (proto.tp_ret_type = ret_type)
+                            "Redefinition of virtual method must be done with same return type.";
+                          let new_proto = { tproto with tp_virtual = Some(s, pos) } in
+                          s.h_vtable <- (pos, new_proto)::(List.remove_assoc pos s.h_vtable);
+                          Some (s, pos)
+                        with | Not_found -> None
+                      in
+                        
+                      List.fold_left (fun k s ->
+                            match check_in_super s with
+                            | None -> k
+                            | r -> r)
+                          c_proto s.h_supers
+                    in
+                    match check_in_super hier with
+                    | None -> if virt then 
+                          (*  allocate new spot in vtable of this object *)
+                          let pos = List.fold_left (fun n (x, _) -> max n (x+4)) 0 hier.h_vtable in
+                          let proto = { tproto with tp_virtual = Some (hier, pos) } in
+                          hier.h_vtable <- (pos, proto)::hier.h_vtable;
+                          proto
+                        else tproto
+                    | some_super -> { tproto with tp_virtual = some_super }
+                ) in
                 (mem, mem_u), m::meth
         ) ((Smap.empty, used), []) c.c_members in
     (* make sure class has default constructor *)
