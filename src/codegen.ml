@@ -55,7 +55,7 @@ let env_get_free_reg e =            (* prend un registre libre, le passe dans la
     c_free_regs = more;
     c_save_regs = r::e.c_save_regs }, r
 
-let globals_env = ref Smap.empty
+let globals_env = ref Smap.empty        (* variables globales *)
 
 (* Chaînes de caractères utilisées dans le programme *)
 let strings = Hashtbl.create 12 (* string -> label *)
@@ -102,6 +102,7 @@ let rec stmt_does_call = function
       *qui doit toujours contenir au moins un registre*
   - une liste de registres à sauvegarder dans tous les cas
   - l'expression pour laquelle on veut générer du code
+
 
   À l'issue d'un appel à gen_expr, il y a plusieurs possibilités, exprimées
   par le type union expr_type décrit ci-dessus :
