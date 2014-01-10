@@ -10,13 +10,13 @@ type whereis_var =
   | VStackByRef of int
 
 type cg_env = {
-  c_penv : env;
+  c_penv : env;     (* environnement du programme (Typing.env) : contient les informations de types *)
   c_names : whereis_var Smap.t;
-  c_ret_ref : bool;
-  c_fp_used : int;
+  c_ret_ref : bool; (* le résultat est-il renvoyé par référence ? *)
+  c_fp_used : int;  (* nombre d'octets sous $fp utilisés par la fonction *)
 }
 
-let globals_env = ref Smap.empty
+let globals_env = ref Smap.empty        (* variables globales *)
 
 let strings = Hashtbl.create 12 (* string -> label *)
 
@@ -26,7 +26,19 @@ let id =
   fun prefix -> (last := !last + 1; prefix ^ (string_of_int !last))
 
 
-(* Génération de code des machins *)
+(* La génération de code à proprement parler !
+
+    La valeur d'une expression est générée dans le registre a0, la pile est utilisée
+    pour les calculs intermédiaires.
+
+    Le plus possible, le générateur de code enregistre dans a0 non pas la valeur
+    de l'expression mais l'adresse où cette valeur est stockée en mémoire. Évidemment,
+    une telle adresse n'existe que pour les expressions qui sont typées comme des
+    références ou des lvalues (c'est essentiellement la même chose).
+    
+    La fonction cr effectue donc, dans le cas où on a l'addresse et non pas la valeur,
+    la lecture mémoire requise pour accéder à la valeur en question.
+ *)
 
 let cr a = if a then lw a0 areg (0, a0) else nop (* conditionnally read *)
 
@@ -34,7 +46,8 @@ let cr a = if a then lw a0 areg (0, a0) else nop (* conditionnally read *)
 let rec gen_expr env e = match e.te_desc with
   | TEInt(k) -> li a0 k, false
   | TENull -> move a0 zero, false
-  | TEThis -> (* convention : this is always the last-pushed argument *)
+  | TEThis -> (* convention : this est toujours le premier argument de la fonction, c'est-à-dire
+                    celui qui est pushé en dernier. on connait donc toujours son adresse *)
     lw a0 areg (8, fp), false
   | TEIdent(i) ->
     begin match Smap.find i env.c_names with
@@ -72,12 +85,16 @@ let rec gen_expr env e = match e.te_desc with
     | Ast.Plus -> t ++ cr a, false
     | Ast.Minus -> t ++ cr a ++ neg a0 a0, false
     | Ast.Not -> t ++ cr a ++ not_ a0 a0, false
-    | Ast.PreIncr -> assert a; t ++ lw a1 areg (0, a0) ++ add a1 a1 oi 1 ++ sw a1 areg (0, a0), true
-    | Ast.PreDecr -> assert a; t ++ lw a1 areg (0, a0) ++ sub a1 a1 oi 1 ++ sw a1 areg (0, a0), true
-    | Ast.PostIncr -> assert a; t ++ move a1 a0 ++ lw a2 areg(0, a1) ++ move a0 a2 ++
-          add a2 a2 oi 1 ++ sw a2 areg(0, a1), false
-    | Ast.PostDecr -> assert a; t ++ move a1 a0 ++ lw a2 areg(0, a1) ++ move a0 a2 ++
-          sub a2 a2 oi 1 ++ sw a2 areg(0, a1), false
+    | Ast.PreIncr -> assert a;
+        t ++ lw a1 areg (0, a0) ++ add a1 a1 oi 1 ++ sw a1 areg (0, a0), true
+    | Ast.PreDecr -> assert a;
+        t ++ lw a1 areg (0, a0) ++ sub a1 a1 oi 1 ++ sw a1 areg (0, a0), true
+    | Ast.PostIncr -> assert a;
+        t ++ move a1 a0 ++ lw a2 areg(0, a1) ++ move a0 a2
+          ++ add a2 a2 oi 1 ++ sw a2 areg(0, a1), false
+    | Ast.PostDecr -> assert a;
+        t ++ move a1 a0 ++ lw a2 areg(0, a1) ++ move a0 a2
+          ++ sub a2 a2 oi 1 ++ sw a2 areg(0, a1), false
     end
   | TEBinary(e1, op, e2) ->
     let t1, ae1 = gen_expr env e1 in
@@ -126,24 +143,24 @@ let rec gen_expr env e = match e.te_desc with
     
 
 let rec gen_stmt env = function
-  | TSEmpty -> nop, nop, env
+  | TSEmpty -> nop, env
   | TSExpr(e) ->
-    comment "expr" ++ (fst (gen_expr env e)), nop, env
+    comment "expr" ++ (fst (gen_expr env e)), env
   | TSIf(cond, s1, s2) ->
     let c, a = gen_expr env cond in
     let l_else = id "_cond_then" in
     let l_end = id "_cond_end" in
-    let c_then, d_then, _ = gen_stmt env s1 in
-    let c_else, d_else, _ = gen_stmt env s2 in
+    let c_then, _ = gen_stmt env s1 in
+    let c_else, _ = gen_stmt env s2 in
     comment "if" ++ c ++ cr a ++ beqz a0 l_else ++ c_then ++ b l_end ++
-      label l_else ++ c_else ++ label l_end, d_then ++ d_else, env
+      label l_else ++ c_else ++ label l_end, env
   | TSWhile(cond, body) ->
     let c, a = gen_expr env cond in
     let l_begin = id "_while_begin" in
     let l_cond = id "_while_cond" in
-    let c_body, d_body, _ = gen_stmt env body in
+    let c_body, _ = gen_stmt env body in
     comment "while" ++ b l_cond ++ label l_begin ++ c_body ++
-      label l_cond ++ c ++ cr a ++ bnez a0 l_begin, d_body, env
+      label l_cond ++ c ++ cr a ++ bnez a0 l_begin, env
   | TSFor(before, cond, after, body) ->
     let l_begin = id "_for_begin" in
     let l_cond = id "_for_cond" in
@@ -155,18 +172,18 @@ let rec gen_stmt env = function
       | None -> b l_begin
       | Some x -> let c, a = gen_expr env x in
         c ++ cr a ++ bnez a0 l_begin in
-    let c_body, d_body, _ = gen_stmt env body in
+    let c_body, _ = gen_stmt env body in
     comment "for" ++ c_before ++ b l_cond ++ label l_begin ++ c_body ++ c_after ++ label l_cond
-      ++ c_cond, d_body, env
+      ++ c_cond, env
   | TSBlock(b) ->
-    let c, d = gen_block env b in
-    comment "block" ++ c, d, env
+    let c = gen_block env b in
+    comment "block" ++ c, env
   | TSReturn (None) ->
-    comment "return" ++ b "_return", nop, env
+    comment "return" ++ b "_return", env
   | TSReturn (Some e) ->
     let c, a = gen_expr env e in
     assert (a || not env.c_ret_ref);
-    comment "return" ++ c ++ cr (not env.c_ret_ref && a) ++ b "_return", nop, env
+    comment "return" ++ c ++ cr (not env.c_ret_ref && a) ++ b "_return", env
   | TSDeclare (ty, id) ->
     let s = type_size env.c_penv ty in
     let new_fp_used = env.c_fp_used + s in
@@ -181,7 +198,7 @@ let rec gen_stmt env = function
       jal cproto.tp_unique_ident
     | _ -> push zero
     in
-    comment ("declare " ^ id) ++ code, nop,
+    comment ("declare " ^ id) ++ code,
     { env with
       c_names = Smap.add id (VStack pos) env.c_names;
       c_fp_used = new_fp_used }
@@ -197,7 +214,7 @@ let rec gen_stmt env = function
       sub sp sp oi cls.tc_size ++ args_code ++ la a0 areg(pos, fp) ++ push a0 ++ jal constr ++
           popn (4 * (List.length args + 1))
     in
-    comment ("declare " ^ id) ++ code, nop,
+    comment ("declare " ^ id) ++ code,
     { env with
       c_names = Smap.add id (VStack pos) env.c_names;
       c_fp_used = new_fp_used; }
@@ -208,36 +225,36 @@ let rec gen_stmt env = function
     let pos = - new_fp_used in
     let code, a = gen_expr env e in
     assert (a || not r);
-    comment ("declare " ^ id) ++ sub sp sp oi 4 ++ code ++ cr (a && not r) ++ sw a0 areg (pos, fp), nop,
+    comment ("declare " ^ id) ++ sub sp sp oi 4 ++ code ++ cr (a && not r) ++ sw a0 areg (pos, fp),
     { env with
       c_names = Smap.add id (if r then VStackByRef pos else VStack pos) env.c_names;
       c_fp_used = new_fp_used }
   | TSWriteCout(sl) ->
-    let text1, data1 = List.fold_left
-      (fun (text, data) s ->
+    let text1 = List.fold_left
+      (fun text s ->
         match s with
         | TSEExpr(e) ->
           let t, a = gen_expr env e in
-          text ++ t ++ cr a ++  li v0 1 ++ syscall, data
+          text ++ t ++ cr a ++  li v0 1 ++ syscall
         | TSEStr(s) ->
-          let l, d =
+          let l =
             if Hashtbl.mem strings s then
-              Hashtbl.find strings s, nop
+              Hashtbl.find strings s
             else
-              let l = id "_s" in Hashtbl.add strings s l;
-              l, label l ++ asciiz s
+              let l = id "_s" in
+              Hashtbl.add strings s l; l
           in
-            text ++ la a0 alab l ++ li v0 4 ++ syscall, data ++ d) (nop, nop) sl in
-    comment "cout<<..." ++ text1, data1, env
+            text ++ la a0 alab l ++ li v0 4 ++ syscall) (nop) sl in
+    comment "cout<<..." ++ text1, env
 and gen_block env b =
-  let text, data, fin_env =
-    List.fold_left (fun (t, d, e) s ->
-        let tt, dd, e = gen_stmt e s in
-          t ++ tt, d ++ dd, e)
-      (nop, nop, env) b
+  let text, fin_env =
+    List.fold_left (fun (t, e) s ->
+        let tt, e = gen_stmt e s in
+          t ++ tt, e)
+      (nop, env) b
   in
     let n = (fin_env.c_fp_used - env.c_fp_used) in
-    text ++ (if n = 0 then nop else popn n), data
+    text ++ (if n = 0 then nop else popn n)
 
 let gen_decl tenv decl = match decl with
   | TDGlobal(ty, id) ->
@@ -264,10 +281,10 @@ let gen_decl tenv decl = match decl with
         lw a0 areg (8, fp) ++ la a0 areg (-c.h_pos, a0) ++ sw a0 areg (8, fp)
       | _ -> nop
     in
-    let text, data = gen_block env block in 
+    let text = gen_block env block in 
     label proto.tp_unique_ident ++
     push fp ++ push ra ++ move fp sp ++ code_for_constructor ++ code_for_virtual ++
-    text ++ b "_return", data
+    text ++ b "_return", nop
   | TDClass(c) ->
     (* Call default constructor of parent classes *)
     let code_parents = List.fold_left
@@ -325,13 +342,17 @@ let generate p =
         let more_text, more_data = gen_decl p.prog_env decl in
         text ++ more_text, data ++ more_data) (nop, nop) p.prog_decls in
     let text =
-      label "main" ++ jal p.prog_main ++
-      li v0 10 ++ syscall ++
-      label "_return" ++ move sp fp ++ pop ra ++ pop fp ++
-      label "_nothing" ++ jr ra ++
-      text in
+      label "main"
+        ++ jal p.prog_main
+        ++ li v0 10 ++ syscall
+        ++ label "_return" ++ move sp fp ++ pop ra ++ pop fp
+        ++ label "_nothing" ++ jr ra
+        ++ text in
+    let str = Hashtbl.fold
+      (fun str lbl data -> data ++ label lbl ++ asciiz str)
+      strings nop in
     { text = text;
-      data = data }
+      data = data ++ str }
   with
   | Assert_failure (k, a, b) -> raise (Very_bad_error (
         "(unexpected) Assertion failure: "^k^" at "^(string_of_int a)^":"^(string_of_int b)))
